@@ -1,0 +1,293 @@
+# Neural DynaQ Job Recommender System
+
+## Introduction
+
+The Neural DynaQ Job Recommender System is a reinforcement learning-based approach to job recommendation that combines model-free learning with model-based planning. This system leverages neural networks to approximate the Q-function and environment dynamics, enabling efficient learning and recommendation in the complex space of job matching.
+
+## Theoretical Foundation
+
+### Reinforcement Learning Framework
+
+In our job recommendation system, we formulate the recommendation problem as a Markov Decision Process (MDP):
+
+- **State (s)**: The candidate's profile, represented by concatenated embedding vectors of their hard skills, soft skills, and experience requirements, each of dimension 384 (total dimension 1152).
+- **Action (a)**: Recommending a specific job, represented by its embedding vector (dimension 384).
+- **Reward (r)**: Feedback from the candidate, either directly or simulated, indicating satisfaction with the recommendation.
+- **Transition (s' = T(s,a))**: How the candidate's state changes after interacting with a recommended job.
+- **Value function (Q(s,a))**: Expected cumulative future reward of recommending job 'a' to candidate in state 's'.
+
+### DynaQ Algorithm
+
+DynaQ (Sutton & Barto, 1998) combines direct reinforcement learning with model-based planning:
+
+1. **Direct Learning**: Update Q-values directly from real experience:
+   ```
+   Q(s,a) ← Q(s,a) + α[r + γ max_a' Q(s',a') - Q(s,a)]
+   ```
+
+2. **Model Learning**: Learn a model of the environment from experience:
+   ```
+   T(s,a) → s'
+   R(s,a) → r
+   ```
+
+3. **Planning**: Use the learned model to simulate experiences and update Q-values:
+   ```
+   For i = 1 to n:
+       s ← random previously observed state
+       a ← random previously taken action in s
+       s',r ← model(s,a)
+       Q(s,a) ← Q(s,a) + α[r + γ max_a' Q(s',a') - Q(s,a)]
+   ```
+
+### Neural Network Extensions
+
+Traditional DynaQ uses tabular representations, which don't scale to large state/action spaces. Our implementation uses neural networks for function approximation:
+
+1. **Q-Network**: Approximates the Q(s,a) function, mapping state-action pairs to expected returns.
+2. **World Model**: Approximates environment dynamics, predicting next state s' and reward r given current state s and action a.
+
+## Model Architecture
+
+### Q-Network
+
+The Q-network approximates the value function Q(s,a), which estimates the expected cumulative reward of taking action a in state s.
+
+```
+Architecture:
+- Input: Concatenated [state, action] vector (1152 + 384 = 1536 dimensions)
+- Hidden layers: [512, 256, 128] neurons with ReLU activation
+- Output: Single scalar value representing Q(s,a)
+- Dropout: 0.2 for regularization
+```
+
+The Q-network is trained to minimize the mean squared error between predicted Q-values and target Q-values:
+
+$$L(\theta) = \mathbb{E}[(r + \gamma \max_{a'} Q(s', a'; \theta^-) - Q(s, a; \theta))^2]$$
+
+where θ represents the Q-network parameters and θ⁻ represents target network parameters.
+
+### World Model
+
+The world model predicts the next state and reward given the current state and action. It serves as an approximation of the environment dynamics:
+
+```
+Architecture:
+- Input: Concatenated [state, action] vector (1536 dimensions)
+- Hidden layers: [512, 256] neurons with ReLU activation
+- Output:
+  * Next state prediction (1152 dimensions)
+  * Reward prediction (scalar)
+- Dropout: 0.2 for regularization
+```
+
+The world model is trained to minimize the combined loss:
+
+$$L(\phi) = MSE(r, \hat{r}) + \lambda \cdot MSE(s', \hat{s'})$$
+
+where ϕ represents the world model parameters, and λ is a weighting factor (0.1 in our implementation).
+
+## Implementation Details
+
+### Database Integration
+
+The system interacts with a MongoDB database containing:
+
+1. **Candidate Embeddings Collection**: Contains vector representations of candidates:
+   - `original_candidate_id`: Unique identifier
+   - `hard_skills_embeddings`: 384-dimension vector representing hard skills
+   - `soft_skills_embeddings`: 384-dimension vector representing soft skills
+   - `experience_requirements_embeddings`: 384-dimension vector representing experience requirements
+
+2. **Job Embeddings Collection**: Contains vector representations of jobs:
+   - `original_job_id`: Reference to the job in the all_jobs collection
+   - `job_title_embeddings`: Vector representation of the job title
+   - `tech_skills_vectors`: Vector representation of technical skills
+
+All embeddings were generated using sentence2vec, which produces 384-dimensional vectors.
+
+### Pretraining Techniques
+
+Our implementation supports three different pretraining techniques to address the cold-start problem:
+
+1. **Cosine Similarity (Baseline)**:
+   - Uses cosine similarity between candidate and job embeddings as a proxy for reward
+   - Reward = (cosine_similarity + 1) / 2 (scaled to [0, 1] range)
+   - Fast and doesn't require external models
+   - Limited ability to capture semantic relevance beyond embedding similarity
+   - Acts as our baseline for comparison
+
+2. **LLM Simulation**:
+   - Uses a Large Language Model (Mistral 7B) to simulate candidate responses
+   - Provides two-step simulation (title view, then full description)
+   - Maps LLM decisions (APPLY, SAVE, IGNORE) to numerical rewards
+   - More accurately captures human-like preferences
+   - Requires significant computational resources and may introduce longer training times
+
+3. **Hybrid Approach**:
+   - Combines both cosine similarity and LLM-based rewards
+   - reward = cosine_weight * cosine_reward + (1 - cosine_weight) * llm_reward
+   - Balances computational efficiency with relevance
+   - Allows tuning the weight parameter to optimize performance
+   - Potentially more robust than either approach alone
+
+Each pretraining technique results in a distinct initial model, which can then be further refined through online learning. By comparing these approaches, we can evaluate the effectiveness of LLM simulation in solving the cold-start problem compared to traditional similarity-based methods.
+
+### Training Process
+
+The system employs a two-phase training approach:
+
+1. **Pretraining Phase**:
+   - Load candidate and job embeddings from the database
+   - Generate rewards using one of the three pretraining techniques
+   - Create a dataset of (state, action, reward, next_state) tuples
+   - Train the Q-network and world model using supervised learning
+   - Q-network is trained to predict rewards
+   - World model is trained to predict next states and rewards
+
+2. **Online Learning Phase**:
+   - Initialize the DynaQ agent with pretrained networks
+   - For each episode:
+     * Select a candidate
+     * Sample available jobs
+     * Interact with the environment (real or simulated)
+     * Update Q-network directly from experience
+     * Update world model
+     * Perform planning steps using the world model
+
+### Planning Steps
+
+During each real interaction, the agent performs multiple planning steps:
+
+1. Sample previously encountered state-action pairs
+2. Use the world model to simulate the outcome (next state and reward)
+3. Update the Q-network based on these simulated experiences
+
+This planning process allows the agent to learn more efficiently by reusing past experiences.
+
+### Exploration Strategy
+
+The system uses an epsilon-greedy exploration strategy:
+
+- With probability ε, select a random job
+- With probability 1-ε, select the job with the highest Q-value
+- ε decays over time from 1.0 to 0.01
+
+This balance between exploration and exploitation ensures the agent discovers optimal recommendations while still taking advantage of known good recommendations.
+
+## Reward Structure
+
+The reward function maps candidate responses to numerical values:
+
+```
+"APPLY": 1.0   # Candidate applies for the job (strong positive)
+"SAVE": 0.5    # Candidate saves the job for later (moderate positive)
+"CLICK": 0.0   # Candidate clicks but doesn't apply/save (neutral)
+"IGNORE": -0.1 # Candidate ignores the recommendation (slight negative)
+```
+
+This structure encourages the agent to recommend jobs that candidates will apply to or save, while discouraging recommendations that are ignored.
+
+## LLM Integration
+
+When simulating candidate responses, the system can use a Large Language Model (like Mistral 7B) to role-play as the candidate:
+
+1. The LLM is provided with:
+   - The candidate's profile information
+   - The job title (first step)
+   - The full job description (second step, if clicked)
+
+2. The LLM makes decisions:
+   - First step: "CLICK" or "IGNORE" based on the job title
+   - Second step: "APPLY", "SAVE", or "IGNORE" based on the full description
+
+3. These decisions are converted to rewards using the reward structure
+
+This approach helps simulate realistic candidate behavior during both pretraining and online learning phases.
+
+## Evaluation Metrics
+
+The system's performance is evaluated using multiple metrics:
+
+1. **Cumulative Reward**: Total reward accumulated over evaluation episodes
+2. **Average Reward per Step**: Cumulative reward divided by the number of steps
+3. **Apply Rate**: Proportion of recommendations that result in "APPLY" decisions
+4. **Click-through Rate (CTR)**: Proportion of recommendations that result in "CLICK" decisions
+5. **Cold-start Performance**: Performance on candidates with minimal interaction history
+
+When comparing the three pretraining approaches, we specifically focus on:
+- Initial performance with no real interactions (true cold-start)
+- Learning speed (how quickly the model improves with real data)
+- Asymptotic performance (final performance after many interactions)
+
+## Key Assumptions
+
+1. **Static State Assumption**: In the current implementation, a candidate's state doesn't change significantly between steps within an episode.
+
+2. **Embedding Relevance**: We assume that sentence2vec embeddings capture the semantic meaning of skills, job descriptions, and candidate profiles.
+
+3. **Reward Approximation**: The reward structure is a simplified approximation of the true utility of job recommendations.
+
+4. **Markov Property**: The candidate's next state and response depend only on the current state and recommendation, not on the history.
+
+5. **LLM Simulation Fidelity**: We assume that the LLM can reasonably simulate how real candidates would respond to job recommendations.
+
+## Advantages of Neural DynaQ
+
+1. **Sample Efficiency**: By combining real experiences with simulated planning steps, the system learns from limited data.
+
+2. **Scalability**: Neural networks enable handling large state and action spaces that wouldn't be feasible with tabular methods.
+
+3. **Cold-start Mitigation**: LLM-based pretraining helps address the cold-start problem for new candidates better than simple embedding similarity.
+
+4. **Adaptive Learning**: The system continuously improves recommendations based on feedback.
+
+5. **Planning Capability**: The world model enables the agent to simulate and plan, improving decision-making.
+
+## Mathematical Formulation
+
+### Q-Learning Update
+
+For each observed transition (s, a, r, s'), the Q-network parameters θ are updated to minimize:
+
+$$L(\theta) = (r + \gamma \max_{a'} Q(s', a'; \theta^-) - Q(s, a; \theta))^2$$
+
+### World Model Update
+
+For each observed transition (s, a, r, s'), the world model parameters ϕ are updated to minimize:
+
+$$L(\phi) = (r - R(s, a; \phi))^2 + \lambda \cdot ||s' - T(s, a; \phi)||^2$$
+
+### DynaQ Planning
+
+After each real experience, perform n planning steps:
+
+1. Sample (s, a) from experience buffer
+2. Generate (r̂, ŝ') = M(s, a; ϕ) from world model
+3. Update Q-network using simulated experience (s, a, r̂, ŝ')
+
+### Hybrid Reward Computation
+
+When using the hybrid pretraining approach, the reward is calculated as:
+
+$$r_{hybrid} = w \cdot r_{cosine} + (1 - w) \cdot r_{llm}$$
+
+where w is the cosine weight parameter (default 0.3).
+
+## Limitations and Future Work
+
+1. **Limited State Transitions**: The current model doesn't fully capture how candidate preferences evolve over time.
+
+2. **Integration Delay**: When using LLM for simulation, there's a delay in getting responses, which could be optimized.
+
+3. **Feature Engineering**: The system could benefit from more nuanced feature representations beyond embeddings.
+
+4. **Exploration Efficiency**: More sophisticated exploration strategies could improve learning efficiency.
+
+5. **Multi-objective Optimization**: Extensions could consider multiple objectives like diversity, novelty, and fairness in recommendations.
+
+6. **Comparative Analysis**: More extensive evaluation of the three pretraining approaches under different conditions could provide deeper insights.
+
+## Conclusion
+
+The Neural DynaQ Job Recommender System represents a sophisticated approach to job recommendation that leverages the strengths of reinforcement learning, neural networks, and LLM simulation. By comparing different pretraining techniques (cosine, LLM, and hybrid), we can better understand the value of LLM-based simulation in addressing the cold-start problem in recommender systems. This approach efficiently learns to make high-quality job recommendations that match candidates' preferences and qualifications. 
