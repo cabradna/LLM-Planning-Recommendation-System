@@ -93,15 +93,13 @@ class DatabaseConnector:
                 raise ValueError(f"No embeddings found for applicant ID: {applicant_id}")
             
             # Extract and combine embeddings
-            hard_skills_embedding = torch.tensor(candidate_data.get("hard_skills_embeddings", []))
-            soft_skills_embedding = torch.tensor(candidate_data.get("soft_skills_embeddings", []))
-            experience_requirements_embedding = torch.tensor(candidate_data.get("experience_requirements_embeddings", []))
+            hard_skills_embedding = torch.tensor(candidate_data.get("hard_skill_embeddings", []))
+            soft_skills_embedding = torch.tensor(candidate_data.get("soft_skill_embeddings", []))
             
             # Concatenate embeddings
             applicant_state = torch.cat([
                 hard_skills_embedding, 
-                soft_skills_embedding, 
-                experience_requirements_embedding
+                soft_skills_embedding
             ], dim=0)
             
             return applicant_state
@@ -122,8 +120,8 @@ class DatabaseConnector:
             List[Dict]: List of job documents.
         """
         try:
-            # Define collection to query (all_jobs or skilled_jobs)
-            collection_name = self.collections["skilled_jobs"]
+            # Define collection to query
+            collection_name = self.collections["jobs_text"]
             collection = self.db[collection_name]
             
             # Apply filter if provided, otherwise get random sample
@@ -199,8 +197,8 @@ class DatabaseConnector:
             Dict: Job details.
         """
         try:
-            collection = self.db[self.collections["all_jobs"]]
-            job = collection.find_one({"original_job_id": job_id})
+            collection = self.db[self.collections["jobs_text"]]
+            job = collection.find_one({"_id": job_id})
             
             if not job:
                 raise ValueError(f"No job found with ID: {job_id}")

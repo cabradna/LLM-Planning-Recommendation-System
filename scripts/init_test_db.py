@@ -33,7 +33,8 @@ def create_dummy_applicants(num_applicants: int = 20) -> List[Dict[str, Any]]:
     Returns:
         List of applicant documents.
     """
-    applicants = []
+    applicants_text = []
+    applicants_embeddings = []
     
     # Define skill pools
     technical_skills = [
@@ -48,8 +49,8 @@ def create_dummy_applicants(num_applicants: int = 20) -> List[Dict[str, Any]]:
     
     for i in range(num_applicants):
         # Generate random embeddings
-        hard_skills_embedding = torch.rand(192).numpy().tolist()
-        soft_skills_embedding = torch.rand(192).numpy().tolist()
+        hard_skill_embeddings = torch.rand(192).numpy().tolist()
+        soft_skill_embeddings = torch.rand(192).numpy().tolist()
         
         # Pick random skills
         num_tech_skills = np.random.randint(2, 6)
@@ -58,20 +59,32 @@ def create_dummy_applicants(num_applicants: int = 20) -> List[Dict[str, Any]]:
         tech_skills = np.random.choice(technical_skills, size=num_tech_skills, replace=False).tolist()
         soft_skills = np.random.choice(soft_skills, size=num_soft_skills, replace=False).tolist()
         
-        # Create document
-        applicant = {
-            "candidate_id": f"applicant_{i}",
-            "hard_skills_embedding": hard_skills_embedding,
-            "soft_skills_embedding": soft_skills_embedding,
-            "technical_skills": tech_skills,
-            "soft_skills": soft_skills,
-            "experience_years": np.random.randint(0, 10),
-            "education_level": np.random.choice(["High School", "Bachelor's", "Master's", "PhD"])
+        # Create candidate text document
+        candidate_id = f"applicant_{i}"
+        candidate_text = {
+            "_id": candidate_id,
+            "bio": f"Experienced professional with background in {', '.join(tech_skills[:2])}",
+            "skills": tech_skills + soft_skills,
+            "experience": [
+                {
+                    "title": f"{np.random.choice(['Junior', 'Senior', 'Lead'])} Developer",
+                    "years": np.random.randint(1, 5)
+                }
+            ]
         }
         
-        applicants.append(applicant)
+        # Create embedding document
+        candidate_embedding = {
+            "_id": f"emb_{candidate_id}",
+            "original_candidate_id": candidate_id,
+            "hard_skill_embeddings": hard_skill_embeddings,
+            "soft_skill_embeddings": soft_skill_embeddings
+        }
+        
+        applicants_text.append(candidate_text)
+        applicants_embeddings.append(candidate_embedding)
     
-    return applicants
+    return applicants_text, applicants_embeddings
 
 def create_dummy_jobs(num_jobs: int = 100) -> List[Dict[str, Any]]:
     """
@@ -112,15 +125,24 @@ def create_dummy_jobs(num_jobs: int = 100) -> List[Dict[str, Any]]:
         
         # Create document
         job = {
-            "original_job_id": f"job_{i}",
+            "_id": f"job_{i}",
+            "doc_id": f"doc_{i}",
+            "source_file": f"source_{np.random.randint(1, 5)}.csv",
+            "original_index": i,
             "job_title": f"{job_titles[title_idx]} {i}",
             "description": job_descriptions[title_idx],
-            "location": np.random.choice(["New York", "San Francisco", "Seattle", "Boston", "Austin"]),
-            "company": f"Company {np.random.randint(1, 20)}",
-            "salary_range": f"${np.random.randint(70, 150)}K - ${np.random.randint(150, 200)}K",
-            "required_skills": np.random.choice(["Python", "Java", "SQL", "JavaScript", "Cloud"], 
-                                              size=np.random.randint(2, 5), 
-                                              replace=False).tolist()
+            "metadata": {
+                "location": np.random.choice(["New York", "San Francisco", "Seattle", "Boston", "Austin"]),
+                "company": f"Company {np.random.randint(1, 20)}",
+                "salary_range": f"${np.random.randint(70, 150)}K - ${np.random.randint(150, 200)}K"
+            },
+            "technical_skills": np.random.choice(["Python", "Java", "SQL", "JavaScript", "Cloud"], 
+                                               size=np.random.randint(2, 5), 
+                                               replace=False).tolist(),
+            "soft_skills": np.random.choice(["Communication", "Team Work", "Problem Solving"], 
+                                          size=np.random.randint(1, 3), 
+                                          replace=False).tolist(),
+            "experience_requirements": [f"{np.random.randint(1, 5)} years of experience"]
         }
         
         jobs.append(job)
@@ -143,12 +165,15 @@ def create_dummy_job_embeddings(jobs: List[Dict[str, Any]]) -> List[Dict[str, An
         # Generate random embeddings
         job_title_embeddings = torch.rand(192).numpy().tolist()
         tech_skills_vectors = torch.rand(192).numpy().tolist()
+        soft_skills_embeddings = torch.rand(192).numpy().tolist()
         
         # Create document
         embedding = {
-            "original_job_id": job["original_job_id"],
+            "_id": f"emb_{job['_id']}",
+            "original_job_id": job["_id"],
             "job_title_embeddings": job_title_embeddings,
-            "tech_skills_vectors": tech_skills_vectors
+            "tech_skills_vectors": tech_skills_vectors,
+            "soft_skills_embeddings": soft_skills_embeddings
         }
         
         job_embeddings.append(embedding)
@@ -181,24 +206,24 @@ def initialize_mongo_db(
         db = client[db_name]
         
         # Create collections
+        candidates_text = db["candidates_text"]
         candidates_embeddings = db["candidates_embeddings"]
-        all_jobs = db["all_jobs"]
-        skilled_jobs = db["skilled_jobs"]
+        jobs_text = db["jobs_text"]
         job_embeddings = db["job_embeddings"]
         
         # Create dummy data
-        applicants = create_dummy_applicants(num_applicants=20)
+        applicants_text, applicants_embeddings = create_dummy_applicants(num_applicants=20)
         jobs = create_dummy_jobs(num_jobs=100)
         job_embs = create_dummy_job_embeddings(jobs)
         
         # Insert data
-        if applicants:
-            candidates_embeddings.insert_many(applicants)
-            print(f"Inserted {len(applicants)} applicant documents")
+        if applicants_text:
+            candidates_text.insert_many(applicants_text)
+            candidates_embeddings.insert_many(applicants_embeddings)
+            print(f"Inserted {len(applicants_text)} applicant documents and their embeddings")
         
         if jobs:
-            all_jobs.insert_many(jobs)
-            skilled_jobs.insert_many(jobs)  # Same jobs for simplicity
+            jobs_text.insert_many(jobs)
             print(f"Inserted {len(jobs)} job documents")
         
         if job_embs:
@@ -206,9 +231,9 @@ def initialize_mongo_db(
             print(f"Inserted {len(job_embs)} job embedding documents")
         
         # Create indexes
-        candidates_embeddings.create_index("candidate_id")
-        all_jobs.create_index("original_job_id")
-        skilled_jobs.create_index("original_job_id")
+        candidates_text.create_index("_id")
+        candidates_embeddings.create_index("original_candidate_id")
+        jobs_text.create_index("_id")
         job_embeddings.create_index("original_job_id")
         
         print(f"Successfully initialized test database: {db_name}")

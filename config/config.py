@@ -11,10 +11,10 @@ DB_CONFIG = {
     "connection_string": os.environ.get("MONGODB_URI", "mongodb://localhost:27017"),
     "database_name": "rl_jobsdb",
     "collections": {
-        "candidates_embeddings": "candidate_embeddings",
+        "jobs_text": "jobs_text",
         "job_embeddings": "job_embeddings",
-        "all_jobs": "all_jobs",
-        "skilled_jobs": "skilled_jobs"
+        "candidates_text": "candidates_text",
+        "candidates_embeddings": "candidates_embeddings"
     }
 }
 
@@ -22,8 +22,8 @@ DB_CONFIG = {
 MODEL_CONFIG = {
     # Neural network architecture
     "q_network": {
-        "state_dim": 1152,  # Dimension of applicant embeddings (3 embeddings of 384 dimensions each)
-        "action_dim": 384,  # Dimension of job embeddings
+        "state_dim": 384,  # Dimension of applicant embeddings (2 embeddings of 192 dimensions each)
+        "action_dim": 384,  # Dimension of job embeddings (combination of title and skills)
         "hidden_dims": [512, 256, 128],  # Hidden layer dimensions
         "dropout_rate": 0.2,  # Dropout rate
         "activation": "relu"  # Activation function
@@ -31,7 +31,7 @@ MODEL_CONFIG = {
     
     # World model network architecture
     "world_model": {
-        "input_dim": 1536,  # state_dim + action_dim
+        "input_dim": 768,  # state_dim + action_dim
         "hidden_dims": [512, 256],  # Hidden layer dimensions
         "dropout_rate": 0.2,  # Dropout rate
         "activation": "relu"  # Activation function

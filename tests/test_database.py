@@ -49,18 +49,18 @@ class TestDatabaseConnector(unittest.TestCase):
         self.collections = {
             "candidates_embeddings": MagicMock(),
             "job_embeddings": MagicMock(),
-            "all_jobs": MagicMock(),
-            "skilled_jobs": MagicMock()
+            "jobs_text": MagicMock(),
+            "candidates_text": MagicMock()
         }
         
         # Configure mock collections
         self.collections["candidates_embeddings"].find_one.return_value = {
-            "candidate_id": self.test_applicant_id,
-            "hard_skills_embedding": self.test_applicant_embedding[:192].numpy().tolist(),
-            "soft_skills_embedding": self.test_applicant_embedding[192:].numpy().tolist()
+            "original_candidate_id": self.test_applicant_id,
+            "hard_skill_embeddings": self.test_applicant_embedding[:192].numpy().tolist(),
+            "soft_skill_embeddings": self.test_applicant_embedding[192:].numpy().tolist()
         }
         
-        self.collections["skilled_jobs"].aggregate.return_value = self.test_jobs
+        self.collections["jobs_text"].aggregate.return_value = self.test_jobs
         
         # Configure job_embeddings find
         def mock_job_embeddings_find(query):
@@ -69,7 +69,7 @@ class TestDatabaseConnector(unittest.TestCase):
         
         self.collections["job_embeddings"].find.side_effect = mock_job_embeddings_find
         
-        self.collections["all_jobs"].find_one.return_value = self.test_jobs[0]
+        self.collections["jobs_text"].find_one.return_value = self.test_jobs[0]
         
         # Patch pymongo.MongoClient
         self.patcher = patch('pymongo.MongoClient', return_value=self.mock_client)
@@ -113,7 +113,7 @@ class TestDatabaseConnector(unittest.TestCase):
         
         # Check that find_one was called with correct args
         self.collections["candidates_embeddings"].find_one.assert_called_once_with({
-            "candidate_id": self.test_applicant_id
+            "original_candidate_id": self.test_applicant_id
         })
         
         # Check state
@@ -129,7 +129,7 @@ class TestDatabaseConnector(unittest.TestCase):
         jobs = connector.sample_candidate_jobs(n=10)
         
         # Check that aggregate was called with correct args
-        self.collections["skilled_jobs"].aggregate.assert_called_once()
+        self.collections["jobs_text"].aggregate.assert_called_once()
         
         # Check jobs
         self.assertEqual(len(jobs), len(self.test_jobs))
@@ -164,8 +164,8 @@ class TestDatabaseConnector(unittest.TestCase):
         job = connector.get_job_details("job_1")
         
         # Check that find_one was called with correct args
-        self.collections["all_jobs"].find_one.assert_called_once_with({
-            "original_job_id": "job_1"
+        self.collections["jobs_text"].find_one.assert_called_once_with({
+            "_id": "job_1"
         })
         
         # Check job

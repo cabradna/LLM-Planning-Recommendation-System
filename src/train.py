@@ -56,11 +56,11 @@ def train_baseline_agent(db_connector: DatabaseConnector,
                          use_llm_simulator: bool = False,
                          seed: int = 42) -> DynaQAgent:
     """
-    Train a baseline agent without pretraining.
+    Train a baseline agent without pretraining for a single applicant.
     
     Args:
         db_connector: Database connector for data retrieval.
-        sample_applicant_ids: List of applicant IDs for training.
+        sample_applicant_ids: List of applicant IDs. Only the first ID will be used as the target.
         num_episodes: Number of training episodes.
         use_llm_simulator: Whether to use the LLM simulator for user feedback.
         seed: Random seed.
@@ -70,6 +70,10 @@ def train_baseline_agent(db_connector: DatabaseConnector,
     """
     # Set random seed
     set_seed(seed)
+    
+    # Select target applicant (first in the list)
+    target_applicant_id = sample_applicant_ids[0]
+    logger.info(f"Training baseline agent specialized for applicant: {target_applicant_id}")
     
     # Create environment
     if use_llm_simulator:
@@ -81,7 +85,8 @@ def train_baseline_agent(db_connector: DatabaseConnector,
     agent = DynaQAgent(
         state_dim=MODEL_CONFIG["q_network"]["state_dim"],
         action_dim=MODEL_CONFIG["q_network"]["action_dim"],
-        device=TRAINING_CONFIG["device"]
+        device=TRAINING_CONFIG["device"],
+        target_applicant_id=target_applicant_id
     )
     
     # Train agent
@@ -93,7 +98,7 @@ def train_baseline_agent(db_connector: DatabaseConnector,
         env=env,
         num_episodes=num_episodes,
         max_steps_per_episode=TRAINING_CONFIG["max_steps_per_episode"],
-        applicant_ids=sample_applicant_ids,
+        applicant_ids=[target_applicant_id],  # Pass only the target applicant
         eval_frequency=TRAINING_CONFIG["eval_frequency"],
         save_frequency=TRAINING_CONFIG["save_frequency"],
         model_dir=model_dir
@@ -103,8 +108,8 @@ def train_baseline_agent(db_connector: DatabaseConnector,
     visualizer = Visualizer()
     visualizer.plot_training_metrics(
         metrics=metrics,
-        title="Baseline Agent Training Metrics",
-        filename="baseline_training_metrics.png"
+        title=f"Baseline Agent Training Metrics (Applicant: {target_applicant_id})",
+        filename=f"baseline_training_metrics_{target_applicant_id}.png"
     )
     
     return agent
@@ -116,11 +121,11 @@ def train_pretrained_agent(db_connector: DatabaseConnector,
                            use_llm_simulator: bool = False,
                            seed: int = 43) -> DynaQAgent:
     """
-    Train an agent with pretraining.
+    Train an agent with pretraining for a single applicant.
     
     Args:
         db_connector: Database connector for data retrieval.
-        sample_applicant_ids: List of applicant IDs for training.
+        sample_applicant_ids: List of applicant IDs. Only the first ID will be used as the target.
         pretrained_model_path: Path to pretrained model.
         num_episodes: Number of training episodes.
         use_llm_simulator: Whether to use the LLM simulator for user feedback.
@@ -131,6 +136,10 @@ def train_pretrained_agent(db_connector: DatabaseConnector,
     """
     # Set random seed
     set_seed(seed)
+    
+    # Select target applicant (first in the list)
+    target_applicant_id = sample_applicant_ids[0]
+    logger.info(f"Training pretrained agent specialized for applicant: {target_applicant_id}")
     
     # Create environment
     if use_llm_simulator:
@@ -155,7 +164,8 @@ def train_pretrained_agent(db_connector: DatabaseConnector,
         action_dim=q_network.action_dim,
         q_network=q_network,
         world_model=world_model,
-        device=TRAINING_CONFIG["device"]
+        device=TRAINING_CONFIG["device"],
+        target_applicant_id=target_applicant_id
     )
     
     # Train agent (fine-tuning)
@@ -172,7 +182,7 @@ def train_pretrained_agent(db_connector: DatabaseConnector,
         env=env,
         num_episodes=num_episodes,
         max_steps_per_episode=TRAINING_CONFIG["max_steps_per_episode"],
-        applicant_ids=sample_applicant_ids,
+        applicant_ids=[target_applicant_id],  # Pass only the target applicant
         eval_frequency=TRAINING_CONFIG["eval_frequency"],
         save_frequency=TRAINING_CONFIG["save_frequency"],
         model_dir=model_dir
@@ -182,8 +192,8 @@ def train_pretrained_agent(db_connector: DatabaseConnector,
     visualizer = Visualizer()
     visualizer.plot_training_metrics(
         metrics=metrics,
-        title="Pretrained Agent Training Metrics",
-        filename="pretrained_training_metrics.png"
+        title=f"Pretrained Agent Training Metrics (Applicant: {target_applicant_id})",
+        filename=f"pretrained_training_metrics_{target_applicant_id}.png"
     )
     
     return agent
@@ -210,12 +220,18 @@ def compare_agents(baseline_agent: DynaQAgent, pretrained_agent: DynaQAgent,
     # Initialize evaluator
     evaluator = Evaluator()
     
-    # Compare agents
+    # Extract the target applicant IDs from the agents
+    baseline_applicant_id = getattr(baseline_agent, "target_applicant_id", sample_applicant_ids[0])
+    pretrained_applicant_id = getattr(pretrained_agent, "target_applicant_id", sample_applicant_ids[0])
+    
+    logger.info(f"Comparing agents: baseline (applicant: {baseline_applicant_id}) vs. pretrained (applicant: {pretrained_applicant_id})")
+    
+    # Compare agents using their respective target applicants
     comparison = evaluator.compare_agents(
         baseline_agent=baseline_agent,
         pretrained_agent=pretrained_agent,
         env=env,
-        applicant_ids=sample_applicant_ids,
+        applicant_ids=[baseline_applicant_id, pretrained_applicant_id],
         num_episodes=num_eval_episodes
     )
     

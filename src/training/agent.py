@@ -48,6 +48,7 @@ class DynaQAgent:
                  world_model: Optional[WorldModel] = None,
                  training_strategy: str = "cosine",
                  device: Optional[torch.device] = None,
+                 target_applicant_id: Optional[str] = None,
                  **kwargs):
         """
         Initialize the Dyna-Q agent.
@@ -60,6 +61,7 @@ class DynaQAgent:
             world_model: World model for environment dynamics prediction. If None, creates a new one.
             training_strategy: Strategy for training ("cosine", "llm", or "hybrid").
             device: Device to run the models on.
+            target_applicant_id: ID of the applicant this agent is specialized for.
             **kwargs: Additional parameters to override config values.
         """
         # Set device
@@ -68,6 +70,11 @@ class DynaQAgent:
         # Set training strategy
         self.training_strategy = training_strategy
         logger.info(f"Initializing agent with training strategy: {training_strategy}")
+        
+        # Set target applicant ID
+        self.target_applicant_id = target_applicant_id
+        if target_applicant_id:
+            logger.info(f"Creating agent specialized for applicant: {target_applicant_id}")
         
         # Get config parameters (overridden by kwargs if provided)
         self.gamma = kwargs.get("gamma", TRAINING_CONFIG["gamma"])
@@ -435,13 +442,18 @@ class DynaQAgent:
               applicant_ids: List[str], eval_frequency: int = 100, save_frequency: int = 1000,
               model_dir: Optional[str] = None, switch_to_llm_episode: Optional[int] = None) -> Dict[str, List[float]]:
         """
-        Train the agent for multiple episodes.
+        Train the agent for multiple episodes on a single applicant.
+        
+        Following the Dyna-Q training philosophy, this method trains a specialized model
+        for a single target applicant. The applicant's profile information remains constant
+        throughout the training run, focusing the learning entirely on one chosen applicant.
         
         Args:
             env: Environment to train in.
             num_episodes: Number of episodes to train for.
             max_steps_per_episode: Maximum number of steps per episode.
-            applicant_ids: List of applicant IDs to use for training.
+            applicant_ids: List of applicant IDs. Only the first ID will be used for training
+                          unless it's explicitly a comparative experiment.
             eval_frequency: Frequency of evaluation (episodes).
             save_frequency: Frequency of model saving (episodes).
             model_dir: Directory to save models to.
@@ -463,12 +475,16 @@ class DynaQAgent:
         if model_dir:
             os.makedirs(model_dir, exist_ok=True)
         
-        # Training loop
+        # Select the target applicant - use the first in the list
+        # This follows the single-applicant philosophy from the documentation
+        target_applicant_id = applicant_ids[0]
+        logger.info(f"Training specialized agent for applicant: {target_applicant_id}")
+        
+        # Save the applicant information in the model metadata
+        self.target_applicant_id = target_applicant_id
+        
+        # Training loop - all episodes use the same applicant
         for episode in range(num_episodes):
-            # Select applicant for this episode
-            applicant_idx = episode % len(applicant_ids)
-            applicant_id = applicant_ids[applicant_idx]
-            
             # Handle strategy switching for hybrid approach
             if self.training_strategy == "hybrid" and switch_to_llm_episode is not None:
                 if episode == switch_to_llm_episode:
@@ -478,8 +494,8 @@ class DynaQAgent:
                     if isinstance(env, HybridEnv):
                         env.set_cosine_weight(0.0)
             
-            # Train for one episode
-            episode_metrics = self.train_step(env, applicant_id, max_steps_per_episode)
+            # Train for one episode using the target applicant
+            episode_metrics = self.train_step(env, target_applicant_id, max_steps_per_episode)
             
             # Update history
             for key, value in episode_metrics.items():
@@ -493,7 +509,8 @@ class DynaQAgent:
             
             # Evaluate periodically
             if eval_frequency > 0 and episode % eval_frequency == 0:
-                eval_reward = self.evaluate(env, 5, max_steps_per_episode, applicant_ids)
+                # Evaluate using the same target applicant
+                eval_reward = self.evaluate(env, 5, max_steps_per_episode, [target_applicant_id])
                 history['eval_reward'].append(eval_reward)
                 logger.info(f"Evaluation at episode {episode}: Avg Reward={eval_reward:.4f}")
             
@@ -503,7 +520,7 @@ class DynaQAgent:
                 logger.info(f"Saved models at episode {episode}")
         
         # Final evaluation
-        final_eval_reward = self.evaluate(env, 10, max_steps_per_episode, applicant_ids)
+        final_eval_reward = self.evaluate(env, 10, max_steps_per_episode, [target_applicant_id])
         history['eval_reward'].append(final_eval_reward)
         logger.info(f"Final evaluation: Avg Reward={final_eval_reward:.4f}")
         
@@ -517,26 +534,29 @@ class DynaQAgent:
     def evaluate(self, env: JobRecommendationEnv, num_episodes: int, 
                   max_steps_per_episode: int, applicant_ids: List[str]) -> float:
         """
-        Evaluate the agent's performance.
+        Evaluate the agent's performance for a specific applicant.
         
         Args:
             env: Environment to evaluate in.
             num_episodes: Number of episodes to evaluate for.
             max_steps_per_episode: Maximum number of steps per episode.
-            applicant_ids: List of applicant IDs to use for evaluation.
+            applicant_ids: List of applicant IDs. Should contain the target applicant this agent was trained for.
+                           If multiple IDs are provided and no target_applicant_id is set, the first ID will be used.
             
         Returns:
             float: Average reward per episode.
         """
         total_reward = 0.0
         
-        # Evaluation loop
+        # Determine which applicant to evaluate on
+        # If agent has a target_applicant_id, use that
+        # Otherwise, use the first in the provided list
+        applicant_id = self.target_applicant_id if hasattr(self, "target_applicant_id") and self.target_applicant_id else applicant_ids[0]
+        logger.info(f"Evaluating agent on applicant: {applicant_id}")
+        
+        # Evaluation loop for the specific applicant
         for episode in range(num_episodes):
-            # Select applicant for this episode
-            applicant_idx = episode % len(applicant_ids)
-            applicant_id = applicant_ids[applicant_idx]
-            
-            # Reset environment
+            # Reset environment with the specific applicant
             state = env.reset(applicant_id)
             episode_reward = 0.0
             
@@ -564,6 +584,7 @@ class DynaQAgent:
             
             # Update total reward
             total_reward += episode_reward
+            logger.debug(f"Evaluation episode {episode} reward: {episode_reward:.4f}")
         
         # Compute average reward
         avg_reward = total_reward / num_episodes if num_episodes > 0 else 0.0
@@ -602,7 +623,8 @@ class DynaQAgent:
                 "epsilon_end": self.epsilon_end,
                 "cosine_weight": self.cosine_weight if hasattr(self, "cosine_weight") else None,
                 "steps_done": self.steps_done,
-                "episode": episode
+                "episode": episode,
+                "target_applicant_id": getattr(self, "target_applicant_id", None)
             }, f)
     
     @classmethod
@@ -661,13 +683,19 @@ class DynaQAgent:
             training_strategy=config.get("training_strategy", "cosine"),
             device=device,
             gamma=config.get("gamma", TRAINING_CONFIG["gamma"]),
-            epsilon=config.get("epsilon", TRAINING_CONFIG["epsilon_end"])
+            epsilon=config.get("epsilon", TRAINING_CONFIG["epsilon_end"]),
+            target_applicant_id=config.get("target_applicant_id", None)
         )
         
         # Set additional parameters
         agent.steps_done = config.get("steps_done", 0)
         if "cosine_weight" in config and config["cosine_weight"] is not None:
             agent.cosine_weight = config["cosine_weight"]
+        
+        # Set target applicant ID if available in config
+        if "target_applicant_id" in config and config["target_applicant_id"] is not None:
+            agent.target_applicant_id = config["target_applicant_id"]
+            logger.info(f"Model was trained for applicant: {agent.target_applicant_id}")
         
         return agent
     

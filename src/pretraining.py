@@ -124,7 +124,9 @@ def load_cosine_data_from_database(db_connector: DatabaseConnector, limit: int =
                 # For simplicity in pretraining, next_state = state (static state)
                 next_state = state
                 
-                # Assign a reward based on cosine similarity
+                # CONCEPTUAL NOTE: Computing the "ground truth" reward for this state-action pair
+                # This reward value will be used as the target for model training/validation
+                # In cosine strategy, we're assuming semantic similarity = reward value
                 reward = float(torch.cosine_similarity(
                     state.unsqueeze(0), 
                     action.unsqueeze(0), 
@@ -134,7 +136,8 @@ def load_cosine_data_from_database(db_connector: DatabaseConnector, limit: int =
                 # Scale reward to [0, 1] range
                 reward = (reward + 1) / 2
                 
-                # Add to lists
+                # Add to lists - these precomputed rewards will be used as the "correct answers"
+                # that the model should learn to predict for these state-action pairs
                 states.append(state)
                 actions.append(action)
                 rewards.append(reward)
@@ -150,7 +153,7 @@ def load_cosine_data_from_database(db_connector: DatabaseConnector, limit: int =
                 
         logger.info(f"Created dataset with {len(states)} valid examples using cosine similarity")
         
-        # Create dataset
+        # Create dataset with precomputed reward values
         dataset = JobRecommendationDataset(states, actions, rewards, next_states)
         return dataset
         
@@ -656,10 +659,12 @@ def pretrain_q_network(q_network: QNetwork,
             actions = actions.to(device)
             rewards = rewards.to(device)
             
-            # Forward pass
+            # Forward pass - model predicts the reward value for this state-action pair
             q_values = q_network(states, actions)
             
-            # Compute loss
+            # Compute loss against precomputed "ground truth" rewards
+            # The model is learning to predict the expected reward for recommending
+            # a particular job to a particular applicant
             loss = criterion(q_values, rewards)
             
             # Backward pass and optimize
@@ -678,22 +683,29 @@ def pretrain_q_network(q_network: QNetwork,
         avg_train_loss = epoch_loss / len(train_loader)
         training_losses.append(avg_train_loss)
         
-        # Validation
+        # Validation - testing the model's ability to predict rewards for unseen applicant-job pairs
+        # This measures generalization and prevents overfitting to the training data
         if val_loader:
-            q_network.eval()
+            # CONCEPTUAL NOTE: During validation, we use a separate subset of data
+            # to evaluate how well the model predicts rewards for state-action pairs
+            # it hasn't seen during training. This helps us measure generalization
+            # and prevent overfitting.
+            q_network.eval()  # Set model to evaluation mode (disables dropout, etc.)
             val_loss = 0.0
             
-            with torch.no_grad():
+            with torch.no_grad():  # No need to track gradients during validation
                 for states, actions, rewards, _ in val_loader:
                     # Move batch to device
                     states = states.to(device)
                     actions = actions.to(device)
                     rewards = rewards.to(device)
                     
-                    # Forward pass
+                    # Forward pass - predict rewards for state-action pairs in validation set
                     q_values = q_network(states, actions)
                     
-                    # Compute loss
+                    # Compute loss against precomputed rewards
+                    # Testing if model can predict the expected reward for job recommendations
+                    # it hasn't seen during training
                     loss = criterion(q_values, rewards)
                     val_loss += loss.item()
             
@@ -1047,6 +1059,13 @@ def main(args: argparse.Namespace) -> None:
         batch_size=args.batch_size or PRETRAINING_CONFIG["batch_size"],
         validation_split=PRETRAINING_CONFIG["validation_split"]
     )
+    
+    # CONCEPTUAL NOTE: The validation loader (val_loader) contains a separate subset of the data
+    # that will be used to evaluate how well the model can predict precomputed rewards for state-action
+    # pairs it hasn't seen during training. These rewards (from cosine/LLM/hybrid) are already 
+    # calculated during dataset creation, so the validation is checking the model's ability to 
+    # generalize to new applicant-job pairs rather than generating new reward values.
+    # This helps measure how well the model will perform on unseen recommendations.
     
     # Initialize metrics dictionary
     model_metrics = {
