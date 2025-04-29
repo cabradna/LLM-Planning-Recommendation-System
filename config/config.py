@@ -2,7 +2,6 @@
 Configuration settings for the Dyna-Q Job Recommender model.
 """
 
-import os
 import torch
 
 # Hugging Face Configuration
@@ -12,17 +11,19 @@ HF_CONFIG = {
 
 # Database Configuration
 DB_CONFIG = {
-    "host": os.environ.get("MONGODB_HOST", "cluster0.mongodb.net"),
-    "port": int(os.environ.get("MONGODB_PORT", 27017)),
-    "database": os.environ.get("MONGODB_DB", "job_recommendation"),
+    "host": "cluster0.mongodb.net",
+    "port": 27017,
+    "database": "job_recommendation",
     "collections": {
         "jobs_text": "jobs_text",
         "jobs_vectors": "jobs_vectors",
         "candidates_text": "candidates_text",
         "candidates_vectors": "candidates_vectors"
     },
-    "username": os.environ.get("MONGODB_USERNAME"),
-    "password": os.environ.get("MONGODB_PASSWORD")
+    "username": "default_user",  # Replace with actual username
+    "password": "default_password",  # Replace with actual password
+    "auth_file": "db_auth.txt",  # Path to the file containing database credentials
+    "connection_string": "mongodb+srv://"  # Base connection string for MongoDB Atlas
 }
 
 # Model Architecture Configuration
