@@ -13,7 +13,7 @@ HF_CONFIG = {
 DB_CONFIG = {
     "host": "cluster0.mongodb.net",
     "port": 27017,
-    "database": "job_recommendation",
+    "database": "rl_jobsdb",
     "collections": {
         "jobs_text": "jobs_text",
         "jobs_vectors": "jobs_vectors",
