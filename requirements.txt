@@ -1,6 +1,23 @@
+# Core ML/DL packages
 torch>=2.0.0
 numpy>=1.20.0
+transformers>=4.30.0
+bitsandbytes>=0.39.0
+accelerate>=0.20.0
+scipy>=1.7.0
+
+# Database and data handling
 pymongo>=4.0.0
+
+# Visualization and progress tracking
 matplotlib>=3.4.0
 tqdm>=4.60.0
-pytest>=6.2.5 
+
+# Testing and development
+pytest>=6.2.5
+setuptools>=65.5.0
+jupytext>=1.14.0
+
+# Additional utilities
+pathlib>=1.0.1
+typing-extensions>=4.5.0

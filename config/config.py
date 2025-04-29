@@ -5,6 +5,11 @@ Configuration settings for the Dyna-Q Job Recommender model.
 import os
 import torch
 
+# Hugging Face Configuration
+HF_CONFIG = {
+    "token_path": os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "..", "..", "..", "..", "..", "hf_primary_token.txt")
+}
+
 # Database Configuration
 DB_CONFIG = {
     # MongoDB Atlas connection settings
@@ -23,7 +28,7 @@ MODEL_CONFIG = {
     # Neural network architecture
     "q_network": {
         "state_dim": 384,  # Dimension of applicant embeddings (2 embeddings of 192 dimensions each)
-        "action_dim": 384,  # Dimension of job embeddings (combination of title and skills)
+        "action_dim": 384*4,  # Dimension of job embeddings (job title, tech skills, experience reqs, soft skills)
         "hidden_dims": [512, 256, 128],  # Hidden layer dimensions
         "dropout_rate": 0.2,  # Dropout rate
         "activation": "relu"  # Activation function
@@ -31,7 +36,7 @@ MODEL_CONFIG = {
     
     # World model network architecture
     "world_model": {
-        "input_dim": 768,  # state_dim + action_dim
+        "input_dim": 384+384*4,  # state_dim + action_dim
         "hidden_dims": [512, 256],  # Hidden layer dimensions
         "dropout_rate": 0.2,  # Dropout rate
         "activation": "relu"  # Activation function

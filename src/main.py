@@ -11,9 +11,13 @@ import sys
 import argparse
 import logging
 from typing import List, Dict, Any, Optional
+from huggingface_hub import login
 
 # Add the project root directory to the path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+# Import configuration
+from config.config import HF_CONFIG
 
 # Configure logging
 logging.basicConfig(
@@ -25,6 +29,16 @@ logging.basicConfig(
     ]
 )
 logger = logging.getLogger(__name__)
+
+# Login to Hugging Face
+try:
+    with open(HF_CONFIG["token_path"], "r") as f:
+        token = f.read().strip()
+    login(token=token)
+    logger.info("Successfully logged in to Hugging Face")
+except Exception as e:
+    logger.error(f"Failed to login to Hugging Face: {e}")
+    sys.exit(1)
 
 def show_info() -> None:
     """

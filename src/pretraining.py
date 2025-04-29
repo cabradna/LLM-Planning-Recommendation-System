@@ -22,7 +22,7 @@ from torch.utils.data import Dataset, DataLoader
 
 # Add the project root directory to the path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from config.config import MODEL_CONFIG, PRETRAINING_CONFIG, PATH_CONFIG, TRAINING_CONFIG
+from config.config import MODEL_CONFIG, PRETRAINING_CONFIG, PATH_CONFIG, TRAINING_CONFIG, HF_CONFIG
 
 # Import modules
 from data.database import DatabaseConnector
@@ -958,9 +958,20 @@ def main(args: argparse.Namespace) -> None:
             # Import and load LLM model if needed for LLM or hybrid methods
             try:
                 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+                from huggingface_hub import login
                 
                 logger.info("Loading LLM model for simulation...")
                 model_id = "mistralai/Mistral-7B-Instruct-v0.2"
+                
+                # Login to Hugging Face
+                try:
+                    with open(HF_CONFIG["token_path"], "r") as f:
+                        token = f.read().strip()
+                    login(token=token)
+                    logger.info("Successfully logged in to Hugging Face for model loading")
+                except Exception as e:
+                    logger.error(f"Failed to login to Hugging Face: {e}")
+                    raise
                 
                 # Configure 4-bit quantization
                 bnb_config = BitsAndBytesConfig(

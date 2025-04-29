@@ -1,0 +1,104 @@
+2025-04-29 11:54:12,239 - __main__ - INFO - Running pretraining...
+2025-04-29 11:54:14,432 - pretraining - INFO - Using device: cpu
+2025-04-29 11:54:14,441 - data.database - INFO - Connected to MongoDB Atlas database: rl_jobsdb
+2025-04-29 11:54:14,442 - pretraining - INFO - Using LLM simulation for pretraining
+2025-04-29 11:54:14,443 - pretraining - ERROR - Failed to load transformers library: No module named 'transformers'
+2025-04-29 11:54:14,444 - pretraining - ERROR - Please install with: pip install transformers accelerate bitsandbytes
+2025-04-29 11:54:14,444 - pretraining - ERROR - Failed to load data: No module named 'transformers'
+2025-04-29 11:55:35,302 - __main__ - INFO - Running pretraining...
+2025-04-29 11:55:37,231 - pretraining - INFO - Using device: cpu
+2025-04-29 11:55:37,254 - data.database - INFO - Connected to MongoDB Atlas database: rl_jobsdb
+2025-04-29 11:55:37,255 - pretraining - INFO - Using LLM simulation for pretraining
+2025-04-29 11:55:38,702 - pretraining - INFO - Loading LLM model for simulation...
+2025-04-29 11:55:38,703 - pretraining - ERROR - Failed to load transformers library: No package metadata was found for bitsandbytes
+2025-04-29 11:55:38,703 - pretraining - ERROR - Please install with: pip install transformers accelerate bitsandbytes
+2025-04-29 11:55:38,703 - pretraining - ERROR - Failed to load data: No package metadata was found for bitsandbytes
+2025-04-29 12:00:08,605 - __main__ - INFO - Running pretraining...
+2025-04-29 12:00:10,733 - pretraining - INFO - Using device: cpu
+2025-04-29 12:00:10,756 - data.database - INFO - Connected to MongoDB Atlas database: rl_jobsdb
+2025-04-29 12:00:10,756 - pretraining - INFO - Using LLM simulation for pretraining
+2025-04-29 12:00:12,165 - pretraining - INFO - Loading LLM model for simulation...
+2025-04-29 12:00:12,385 - pretraining - ERROR - Failed to load LLM model: You are trying to access a gated repo.
+Make sure to have access to it at https://huggingface.co/mistralai/Mistral-7B-Instruct-v0.2.
+403 Client Error. (Request ID: Root=1-6810f78b-3c25c97565b3c3c519fb046b;d533c7db-6cb2-4794-84c9-805eab110b67)
+
+Cannot access gated repo for url https://huggingface.co/mistralai/Mistral-7B-Instruct-v0.2/resolve/main/config.json.
+Access to model mistralai/Mistral-7B-Instruct-v0.2 is restricted and you are not in the authorized list. Visit https://huggingface.co/mistralai/Mistral-7B-Instruct-v0.2 to ask for access.
+2025-04-29 12:00:12,386 - pretraining - ERROR - Failed to load data: You are trying to access a gated repo.
+Make sure to have access to it at https://huggingface.co/mistralai/Mistral-7B-Instruct-v0.2.
+403 Client Error. (Request ID: Root=1-6810f78b-3c25c97565b3c3c519fb046b;d533c7db-6cb2-4794-84c9-805eab110b67)
+
+Cannot access gated repo for url https://huggingface.co/mistralai/Mistral-7B-Instruct-v0.2/resolve/main/config.json.
+Access to model mistralai/Mistral-7B-Instruct-v0.2 is restricted and you are not in the authorized list. Visit https://huggingface.co/mistralai/Mistral-7B-Instruct-v0.2 to ask for access.
+2025-04-29 12:05:38,119 - __main__ - INFO - Successfully logged in to Hugging Face
+2025-04-29 12:05:38,120 - __main__ - INFO - Running pretraining...
+2025-04-29 12:05:40,026 - pretraining - INFO - Using device: cpu
+2025-04-29 12:05:40,044 - data.database - INFO - Connected to MongoDB Atlas database: rl_jobsdb
+2025-04-29 12:05:40,044 - pretraining - INFO - Using LLM simulation for pretraining
+2025-04-29 12:05:40,886 - pretraining - INFO - Loading LLM model for simulation...
+2025-04-29 12:05:40,954 - pretraining - ERROR - Failed to load LLM model: You are trying to access a gated repo.
+Make sure to have access to it at https://huggingface.co/mistralai/Mistral-7B-Instruct-v0.2.
+403 Client Error. (Request ID: Root=1-6810f8d3-3721374c3f930de537ec6aac;ed2c2882-08ba-4171-9651-74df657540b7)
+
+Cannot access gated repo for url https://huggingface.co/mistralai/Mistral-7B-Instruct-v0.2/resolve/main/config.json.
+Access to model mistralai/Mistral-7B-Instruct-v0.2 is restricted and you are not in the authorized list. Visit https://huggingface.co/mistralai/Mistral-7B-Instruct-v0.2 to ask for access.
+2025-04-29 12:05:40,954 - pretraining - ERROR - Failed to load data: You are trying to access a gated repo.
+Make sure to have access to it at https://huggingface.co/mistralai/Mistral-7B-Instruct-v0.2.
+403 Client Error. (Request ID: Root=1-6810f8d3-3721374c3f930de537ec6aac;ed2c2882-08ba-4171-9651-74df657540b7)
+
+Cannot access gated repo for url https://huggingface.co/mistralai/Mistral-7B-Instruct-v0.2/resolve/main/config.json.
+Access to model mistralai/Mistral-7B-Instruct-v0.2 is restricted and you are not in the authorized list. Visit https://huggingface.co/mistralai/Mistral-7B-Instruct-v0.2 to ask for access.
+2025-04-29 12:07:45,744 - __main__ - INFO - Successfully logged in to Hugging Face
+2025-04-29 12:07:45,745 - __main__ - INFO - Running pretraining...
+2025-04-29 12:07:46,162 - pretraining - INFO - Using device: cpu
+2025-04-29 12:07:46,191 - data.database - INFO - Connected to MongoDB Atlas database: rl_jobsdb
+2025-04-29 12:07:46,192 - pretraining - INFO - Using LLM simulation for pretraining
+2025-04-29 12:07:46,994 - pretraining - INFO - Loading LLM model for simulation...
+2025-04-29 12:07:47,064 - pretraining - ERROR - Failed to load LLM model: You are trying to access a gated repo.
+Make sure to have access to it at https://huggingface.co/mistralai/Mistral-7B-Instruct-v0.2.
+403 Client Error. (Request ID: Root=1-6810f951-7000fd9665dbb7f0224678b6;b315e10d-0e5c-4707-8d30-6cb4ece3f205)
+
+Cannot access gated repo for url https://huggingface.co/mistralai/Mistral-7B-Instruct-v0.2/resolve/main/config.json.
+Access to model mistralai/Mistral-7B-Instruct-v0.2 is restricted and you are not in the authorized list. Visit https://huggingface.co/mistralai/Mistral-7B-Instruct-v0.2 to ask for access.
+2025-04-29 12:07:47,065 - pretraining - ERROR - Failed to load data: You are trying to access a gated repo.
+Make sure to have access to it at https://huggingface.co/mistralai/Mistral-7B-Instruct-v0.2.
+403 Client Error. (Request ID: Root=1-6810f951-7000fd9665dbb7f0224678b6;b315e10d-0e5c-4707-8d30-6cb4ece3f205)
+
+Cannot access gated repo for url https://huggingface.co/mistralai/Mistral-7B-Instruct-v0.2/resolve/main/config.json.
+Access to model mistralai/Mistral-7B-Instruct-v0.2 is restricted and you are not in the authorized list. Visit https://huggingface.co/mistralai/Mistral-7B-Instruct-v0.2 to ask for access.
+2025-04-29 12:09:45,862 - __main__ - INFO - Successfully logged in to Hugging Face
+2025-04-29 12:09:45,863 - __main__ - INFO - Running pretraining...
+2025-04-29 12:09:46,291 - pretraining - INFO - Using device: cpu
+2025-04-29 12:09:46,313 - data.database - INFO - Connected to MongoDB Atlas database: rl_jobsdb
+2025-04-29 12:09:46,314 - pretraining - INFO - Using LLM simulation for pretraining
+2025-04-29 12:09:47,119 - pretraining - INFO - Loading LLM model for simulation...
+2025-04-29 12:09:47,147 - pretraining - INFO - Successfully logged in to Hugging Face for model loading
+2025-04-29 12:09:47,262 - pretraining - ERROR - Failed to load LLM model: You are trying to access a gated repo.
+Make sure to have access to it at https://huggingface.co/mistralai/Mistral-7B-Instruct-v0.2.
+403 Client Error. (Request ID: Root=1-6810f9ca-6d4306192b08eeb368194949;742d80c6-3c3e-4413-891a-b04bdc704470)
+
+Cannot access gated repo for url https://huggingface.co/mistralai/Mistral-7B-Instruct-v0.2/resolve/main/config.json.
+Access to model mistralai/Mistral-7B-Instruct-v0.2 is restricted and you are not in the authorized list. Visit https://huggingface.co/mistralai/Mistral-7B-Instruct-v0.2 to ask for access.
+2025-04-29 12:09:47,262 - pretraining - ERROR - Failed to load data: You are trying to access a gated repo.
+Make sure to have access to it at https://huggingface.co/mistralai/Mistral-7B-Instruct-v0.2.
+403 Client Error. (Request ID: Root=1-6810f9ca-6d4306192b08eeb368194949;742d80c6-3c3e-4413-891a-b04bdc704470)
+
+Cannot access gated repo for url https://huggingface.co/mistralai/Mistral-7B-Instruct-v0.2/resolve/main/config.json.
+Access to model mistralai/Mistral-7B-Instruct-v0.2 is restricted and you are not in the authorized list. Visit https://huggingface.co/mistralai/Mistral-7B-Instruct-v0.2 to ask for access.
+2025-04-29 12:12:06,327 - __main__ - INFO - Successfully logged in to Hugging Face
+2025-04-29 12:12:06,328 - __main__ - INFO - Running pretraining...
+2025-04-29 12:12:06,732 - pretraining - INFO - Using device: cpu
+2025-04-29 12:12:06,738 - data.database - INFO - Connected to MongoDB Atlas database: rl_jobsdb
+2025-04-29 12:12:06,739 - pretraining - INFO - Using LLM simulation for pretraining
+2025-04-29 12:12:07,539 - pretraining - INFO - Loading LLM model for simulation...
+2025-04-29 12:12:07,572 - pretraining - INFO - Successfully logged in to Hugging Face for model loading
+2025-04-29 12:12:12,832 - bitsandbytes.cextension - WARNING - The installed version of bitsandbytes was compiled without GPU support. 8-bit optimizers, 8-bit multiplication, and GPU quantization are unavailable.
+2025-04-29 12:12:12,848 - pretraining - ERROR - Failed to load LLM model: CUDA is required but not available for bitsandbytes. Please consider installing the multi-platform enabled version of bitsandbytes, which is currently a work in progress. Please check currently supported platforms and installation instructions at https://huggingface.co/docs/bitsandbytes/main/en/installation#multi-backend
+2025-04-29 12:12:12,848 - pretraining - ERROR - Failed to load data: CUDA is required but not available for bitsandbytes. Please consider installing the multi-platform enabled version of bitsandbytes, which is currently a work in progress. Please check currently supported platforms and installation instructions at https://huggingface.co/docs/bitsandbytes/main/en/installation#multi-backend
+2025-04-29 12:21:53,446 - __main__ - INFO - Successfully logged in to Hugging Face
+2025-04-29 12:21:53,447 - __main__ - INFO - Running pretraining...
+2025-04-29 12:21:53,882 - pretraining - INFO - Using device: cuda
+2025-04-29 12:21:53,898 - data.database - INFO - Connected to MongoDB Atlas database: rl_jobsdb
+2025-04-29 12:21:53,899 - pretraining - INFO - Using LLM simulation for pretraining
+2025-04-29 12:21:54,748 - pretraining - INFO - Loading LLM model for simulation...
+2025-04-29 12:21:54,779 - pretraining - INFO - Successfully logged in to Hugging Face for model loading
