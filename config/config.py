@@ -7,7 +7,7 @@ import torch
 
 # Hugging Face Configuration
 HF_CONFIG = {
-    "token_path": os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "..", "..", "..", "..", "..", "hf_primary_token.txt")
+    "token_path": "hf_primary_token.txt"
 }
 
 # Database Configuration
@@ -15,6 +15,7 @@ DB_CONFIG = {
     # MongoDB Atlas connection settings
     "connection_string": os.environ.get("MONGODB_URI", "mongodb://localhost:27017"),
     "database_name": "rl_jobsdb",
+    "auth_file": "db_auth.txt",  # Path to file containing MongoDB credentials
     "collections": {
         "jobs_text": "jobs_text",
         "job_embeddings": "job_embeddings",

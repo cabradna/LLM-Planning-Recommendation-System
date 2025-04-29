@@ -66,6 +66,28 @@ The system connects to a MongoDB database with the following collections:
 - `candidates_text`: Contains candidate profile information
 - `candidates_embeddings`: Stores vector embeddings for applicants' skills and experience
 
+### Authentication Files
+
+The system requires two authentication files in the project root directory:
+
+1. `db_auth.txt`: Contains MongoDB Atlas credentials
+   - First line: MongoDB username
+   - Second line: MongoDB password
+   - Example:
+     ```
+     your_mongodb_username
+     your_mongodb_password
+     ```
+
+2. `hf_primary_token.txt`: Contains the Hugging Face API token for LLM-based strategies
+   - Single line containing the API token
+   - Example:
+     ```
+     hf_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+     ```
+
+These files are used by the system to authenticate with MongoDB Atlas and Hugging Face services. They should be placed in the project root directory and are referenced in the configuration file (`config/config.py`).
+
 ## Installation
 
 1. Clone the repository

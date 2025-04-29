@@ -8,10 +8,10 @@ import torch
 import numpy as np
 import logging
 from typing import Dict, List, Optional, Tuple, Any
+import os
 
 # Import configuration
 import sys
-import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../../')))
 from config.config import DB_CONFIG
 
@@ -41,12 +41,43 @@ class DatabaseConnector:
             connection_string: MongoDB connection string. If None, uses the value from config.
             db_name: Database name. If None, uses the value from config.
         """
-        self.connection_string = connection_string or DB_CONFIG["connection_string"]
+        self.connection_string = connection_string or self._get_connection_string()
         self.db_name = db_name or DB_CONFIG["database_name"]
         self.collections = DB_CONFIG["collections"]
         self.client = None
         self.db = None
         self._connect()
+    
+    def _get_connection_string(self) -> str:
+        """
+        Get the MongoDB connection string with authentication.
+        
+        Returns:
+            str: Complete MongoDB connection string with authentication.
+        """
+        try:
+            # Get the path to the auth file
+            auth_file = DB_CONFIG["auth_file"]
+            if not os.path.exists(auth_file):
+                raise FileNotFoundError(f"Auth file not found at {auth_file}")
+            
+            # Read credentials from file
+            with open(auth_file, 'r') as f:
+                mongo_user = f.readline().strip()
+                mongo_password = f.readline().strip()
+            
+            # Construct connection string
+            base_uri = DB_CONFIG["connection_string"]
+            if base_uri.startswith("mongodb+srv://"):
+                # For Atlas connection
+                return f"mongodb+srv://{mongo_user}:{mongo_password}@cluster0.zqzq6hs.mongodb.net/"
+            else:
+                # For local connection
+                return f"mongodb://{mongo_user}:{mongo_password}@{base_uri.split('://')[1]}"
+                
+        except Exception as e:
+            logger.error(f"Error getting connection string: {e}")
+            raise
     
     def _connect(self) -> None:
         """
