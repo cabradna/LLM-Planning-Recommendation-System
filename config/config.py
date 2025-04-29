@@ -11,7 +11,7 @@ HF_CONFIG = {
 
 # Database Configuration
 DB_CONFIG = {
-    "host": "cluster0.mongodb.net",
+    "host": "cluster0.zqzq6hs.mongodb.net",
     "port": 27017,
     "database": "rl_jobsdb",
     "collections": {
@@ -69,6 +69,16 @@ TRAINING_CONFIG = {
     "max_steps_per_episode": 100,  # Maximum steps per episode
     "eval_frequency": 100,  # Evaluation frequency (episodes)
     "save_frequency": 1000,  # Model saving frequency (episodes)
+
+    # Data parameters
+    "num_jobs": 100,  # Number of jobs to sample
+    "num_candidates": 10,  # Number of candidates to consider
+
+    # Pretraining parameters
+    "pretraining": {
+        "num_samples": 1000,  # Number of samples for pretraining
+        "num_epochs": 20,  # Number of pretraining epochs
+    },
 
     "random_seed": 42,  # Random seed for reproducibility
     
@@ -137,5 +147,6 @@ PATH_CONFIG = {
     "model_dir": "../models",  # Directory to save models
     "log_dir": "../logs",  # Directory to save logs
     "data_dir": "../data",  # Directory to save/load data
-    "results_dir": "../results"  # Directory to save evaluation results
+    "results_dir": "../results",  # Directory to save evaluation results
+    "repo_url": "https://github.com/cabradna/LLM-Planning-Recommendation-System.git"  # Repository URL
 } 

@@ -42,7 +42,7 @@ class DatabaseConnector:
             db_name: Database name. If None, uses the value from config.
         """
         self.connection_string = connection_string or self._get_connection_string()
-        self.db_name = db_name or DB_CONFIG["database_name"]
+        self.db_name = db_name or DB_CONFIG["database"]
         self.collections = DB_CONFIG["collections"]
         self.client = None
         self.db = None
