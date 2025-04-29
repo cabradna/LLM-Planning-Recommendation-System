@@ -12,16 +12,17 @@ HF_CONFIG = {
 
 # Database Configuration
 DB_CONFIG = {
-    # MongoDB Atlas connection settings
-    "connection_string": os.environ.get("MONGODB_URI", "mongodb://localhost:27017"),
-    "database_name": "rl_jobsdb",
-    "auth_file": "db_auth.txt",  # Path to file containing MongoDB credentials
+    "host": os.environ.get("MONGODB_HOST", "cluster0.mongodb.net"),
+    "port": int(os.environ.get("MONGODB_PORT", 27017)),
+    "database": os.environ.get("MONGODB_DB", "job_recommendation"),
     "collections": {
         "jobs_text": "jobs_text",
-        "job_embeddings": "job_embeddings",
+        "jobs_vectors": "jobs_vectors",
         "candidates_text": "candidates_text",
-        "candidates_embeddings": "candidates_embeddings"
-    }
+        "candidates_vectors": "candidates_vectors"
+    },
+    "username": os.environ.get("MONGODB_USERNAME"),
+    "password": os.environ.get("MONGODB_PASSWORD")
 }
 
 # Model Architecture Configuration
@@ -67,6 +68,8 @@ TRAINING_CONFIG = {
     "max_steps_per_episode": 100,  # Maximum steps per episode
     "eval_frequency": 100,  # Evaluation frequency (episodes)
     "save_frequency": 1000,  # Model saving frequency (episodes)
+
+    "random_seed": 42,  # Random seed for reproducibility
     
     # Hardware settings
     "device": torch.device("cuda" if torch.cuda.is_available() else "cpu")

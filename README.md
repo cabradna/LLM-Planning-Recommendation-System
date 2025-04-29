@@ -58,47 +58,44 @@ neural_model_repo/
 - **Comprehensive Pre-Training**: Addresses the cold-start problem through multiple pre-training approaches
 - **Evaluation Framework**: Tools for comparing different strategies and measuring cold-start performance
 
-## MongoDB Database Structure
+## Environment Setup
 
-The system connects to a MongoDB database with the following collections:
-- `jobs_text`: Contains job posting text data
-- `job_embeddings`: Stores vector embeddings for jobs
-- `candidates_text`: Contains candidate profile information
-- `candidates_embeddings`: Stores vector embeddings for applicants' skills and experience
+1. Clone the repository:
+```bash
+git clone https://github.com/yourusername/LLM-Planning-Recommendation-System.git
+cd LLM-Planning-Recommendation-System
+```
 
-### Authentication Files
+2. Set up environment variables for MongoDB Atlas:
+```bash
+export MONGODB_HOST="cluster0.mongodb.net"
+export MONGODB_PORT=27017
+export MONGODB_DB="job_recommendation"
+export MONGODB_USERNAME="your_username"
+export MONGODB_PASSWORD="your_password"
+```
 
-The system requires two authentication files in the project root directory:
+3. Install dependencies:
+```bash
+pip install -r requirements.txt
+pip install -e .
+```
 
-1. `db_auth.txt`: Contains MongoDB Atlas credentials
-   - First line: MongoDB username
-   - Second line: MongoDB password
-   - Example:
-     ```
-     your_mongodb_username
-     your_mongodb_password
-     ```
+4. Run the notebook:
+```bash
+jupyter notebook neural_dyna_q_notebook.py
+```
 
-2. `hf_primary_token.txt`: Contains the Hugging Face API token for LLM-based strategies
-   - Single line containing the API token
-   - Example:
-     ```
-     hf_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-     ```
+## Configuration
 
-These files are used by the system to authenticate with MongoDB Atlas and Hugging Face services. They should be placed in the project root directory and are referenced in the configuration file (`config/config.py`).
+The system uses environment variables for configuration. Key settings include:
 
-## Installation
+- MongoDB Atlas connection details
+- Model hyperparameters
+- Training parameters
+- Evaluation settings
 
-1. Clone the repository
-2. Install the required packages:
-   ```
-   pip install -r requirements.txt
-   ```
-3. Install the package in development mode:
-   ```
-   pip install -e .
-   ```
+All configuration is managed through environment variables for security and flexibility.
 
 ## Dependencies
 
