@@ -342,13 +342,13 @@ if STRATEGY_CONFIG["llm"]["enabled"] and IN_COLAB:
         
         print(f"LLM model loaded successfully.")
         
-        # Set up LLM in the environment for reward calculation
-        env.setup_llm(llm_model, tokenizer)
+        # Set up LLM in the environment for reward calculation and capture returned environment
+        # setup_llm may return a new environment instance if current one doesn't support LLM
+        env = env.setup_llm(llm_model, tokenizer)
     except Exception as e:
         print(f"Error loading LLM: {e}")
         print("Switching to cosine similarity reward strategy.")
         env.reward_strategy = "cosine"
-        env.use_llm = False
 
 # %% [markdown]
 # ## 10. Training Setup

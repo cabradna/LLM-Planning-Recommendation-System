@@ -119,7 +119,8 @@ STRATEGY_CONFIG = {
     "llm": {
         "enabled": True,
         "description": "Uses LLM to simulate user responses based on applicant-job match",
-        "model_name": "gpt-3.5-turbo",  # LLM model to use
+        "model_name": "mistralai/Mistral-7B-Instruct-v0.1",  # LLM model to use
+        "model_id": "mistralai/Mistral-7B-Instruct-v0.1",    # LLM model identifier for Hugging Face
         "response_mapping": {  # Mapping from LLM response to reward values
             "APPLY": 1.0,
             "SAVE": 0.5,
@@ -128,7 +129,12 @@ STRATEGY_CONFIG = {
         },
         "temperature": 0.2,  # LLM sampling temperature
         "max_tokens": 50,  # Maximum tokens in LLM response
-        "cache_responses": True  # Whether to cache LLM responses for similar inputs
+        "cache_responses": True,  # Whether to cache LLM responses for similar inputs
+        "quantization": {
+            "load_in_4bit": True,  # Use 4-bit quantization to reduce memory usage
+            "quant_type": "nf4",  # Quantization type - normalized float 4
+            "use_nested_quant": False  # Whether to use nested quantization
+        }
     },
     
     # Hybrid Strategy

@@ -241,6 +241,66 @@ class JobRecommendationEnv:
         """
         if hasattr(self, 'db') and self.db is not None:
             self.db.close()
+            
+    def setup_llm(self, llm_model, tokenizer, device="auto"):
+        """
+        Set up an LLM for reward calculation.
+        
+        This method allows setting up or replacing the LLM model during runtime.
+        If the environment is not using an LLM-based reward strategy, this
+        will automatically switch to a hybrid strategy.
+        
+        Args:
+            llm_model: The LLM model to use for simulation.
+            tokenizer: Tokenizer for the LLM model.
+            device: Device to run the LLM on.
+        """
+        # Determine the appropriate environment class based on the reward strategy
+        if self.reward_strategy == "cosine":
+            # Create a new hybrid environment with the provided LLM
+            hybrid_env = HybridEnv(
+                db_connector=self.db,
+                reward_scheme=self.reward_scheme,
+                llm_model=llm_model,
+                tokenizer=tokenizer,
+                device=device,
+                cosine_weight=1.0,  # Start with cosine only
+                random_seed=self.rng.randint(0, 2**32-1)
+            )
+            
+            # Transfer state
+            hybrid_env.current_applicant_id = self.current_applicant_id
+            hybrid_env.current_state = self.current_state
+            hybrid_env.candidate_jobs = self.candidate_jobs
+            hybrid_env.job_vectors = self.job_vectors
+            hybrid_env.job_id_to_idx = self.job_id_to_idx
+            
+            # Return the new environment
+            logger.info("Switching to hybrid environment with LLM")
+            return hybrid_env
+        
+        elif self.reward_strategy == "llm":
+            # Update the LLM components directly
+            if isinstance(self, LLMSimulatorEnv):
+                self.llm_model = llm_model
+                self.tokenizer = tokenizer
+                self.device = device
+                logger.info("Updated LLM components in LLMSimulatorEnv")
+            else:
+                logger.warning("Environment is configured for LLM but is not an LLMSimulatorEnv instance")
+        
+        elif self.reward_strategy == "hybrid":
+            # Update the LLM components directly
+            if isinstance(self, HybridEnv):
+                self.llm_model = llm_model
+                self.tokenizer = tokenizer
+                self.device = device
+                logger.info("Updated LLM components in HybridEnv")
+            else:
+                logger.warning("Environment is configured for hybrid but is not a HybridEnv instance")
+        
+        # Return self if we didn't create a new environment
+        return self
 
 
 class LLMSimulatorEnv(JobRecommendationEnv):
