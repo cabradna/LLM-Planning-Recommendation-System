@@ -98,7 +98,8 @@ if IN_COLAB:
         # Install extra packages if LLM or hybrid strategy is enabled.
         if SETUP_STRATEGY_CONFIG["llm"]["enabled"] or SETUP_STRATEGY_CONFIG["hybrid"]["enabled"]:
             print("Installing LLM-related packages (transformers, accelerate, bitsandbytes)...")
-            subprocess.run([sys.executable, "-m", "pip", "install", "-q", "transformers", "accelerate", "bitsandbytes"], check=True)
+            subprocess.run([sys.executable, "-m", "pip", "install", "-q", "transformers", "accelerate"], check=True)
+            subprocess.run([sys.executable, "-m", "pip", "install", "-q", "bitsandbytes>=0.45.0"], check=True)
             print("LLM-related packages installed successfully.")
 
         print("Repository cloned and dependencies installed successfully.")
