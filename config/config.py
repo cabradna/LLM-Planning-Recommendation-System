@@ -30,7 +30,7 @@ DB_CONFIG = {
 MODEL_CONFIG = {
     # Neural network architecture
     "q_network": {
-        "state_dim": 384,  # Dimension of applicant embeddings (2 embeddings of 192 dimensions each)
+        "state_dim": 768,  # Dimension of applicant embeddings (was 384, updating to match actual env output)
         "action_dim": 384*4,  # Dimension of job embeddings (job title, tech skills, experience reqs, soft skills)
         "hidden_dims": [512, 256, 128],  # Hidden layer dimensions
         "dropout_rate": 0.2,  # Dropout rate
@@ -39,7 +39,7 @@ MODEL_CONFIG = {
     
     # World model network architecture
     "world_model": {
-        "input_dim": 384+384*4,  # state_dim + action_dim
+        "input_dim": 768+384*4,  # state_dim + action_dim (updating to match new state_dim)
         "hidden_dims": [512, 256],  # Hidden layer dimensions
         "dropout_rate": 0.2,  # Dropout rate
         "activation": "relu"  # Activation function
