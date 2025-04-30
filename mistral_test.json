@@ -1,0 +1,273 @@
+{
+ "nbformat": 4,
+ "nbformat_minor": 5,
+ "metadata": {
+  "kernelspec": {
+   "display_name": "Python 3",
+   "language": "python",
+   "name": "python3"
+  },
+  "language_info": {
+   "codemirror_mode": {
+    "name": "ipython",
+    "version": 3
+   },
+   "file_extension": ".py",
+   "mimetype": "text/x-python",
+   "name": "python",
+   "nbconvert_exporter": "python",
+   "pygments_lexer": "ipython3",
+   "version": "3.10.12" 
+  },
+  "colab": {
+    "provenance": [],
+    "include_colab_link": true
+   }
+ },
+ "cells": [
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "id": "intro-markdown"
+   },
+   "source": [
+    "# Mistral 7B Instruct Inference on Google Colab\n",
+    "\n",
+    "This notebook demonstrates how to load the `mistralai/Mistral-7B-Instruct-v0.1` model and run inference using the Hugging Face `transformers` library.\n",
+    "\n",
+    "**Key Steps:**\n",
+    "1.  **Install Libraries:** Install `transformers`, `accelerate`, `bitsandbytes`, and `torch`.\n",
+    "2.  **Load Model & Tokenizer:** Load the pre-trained model and tokenizer. We use 4-bit quantization (`bitsandbytes`) to fit the model into Colab's GPU memory.\n",
+    "3.  **Define Inference Function:** Create a reusable function to generate text based on a prompt.\n",
+    "4.  **Run Inference:** Provide a sample prompt and generate a response."
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "id": "setup-markdown"
+   },
+   "source": [
+    "## 1. Install Necessary Libraries\n",
+    "\n",
+    "We need `transformers` for the model and tokenizer, `accelerate` for efficient loading across devices, `bitsandbytes` for quantization (to save memory), and `torch` as the backend deep learning framework."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {
+    "colab": {
+     "base_uri": "https://localhost:8080/"
+    },
+    "id": "install-libs",
+    "outputId": "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+   },
+   "outputs": [],
+   "source": [
+    "# The -q flag suppresses verbose output during installation\n",
+    "!pip install transformers accelerate bitsandbytes torch -q"
+    ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "id": "imports-markdown"
+   },
+   "source": [
+    "## 2. Import Libraries and Set Up Model Loading\n",
+    "\n",
+    "Import the required components from the installed libraries."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {
+    "id": "import-libs"
+   },
+   "outputs": [],
+   "source": [
+    "import torch\n",
+    "from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig\n",
+    "import warnings\n",
+    "\n",
+    "# Optional: Ignore minor warnings\n",
+    "warnings.filterwarnings(\"ignore\")"
+   ]
+  },
+    {
+   "cell_type": "markdown",
+   "metadata": {
+    "id": "load-model-markdown"
+   },
+   "source": [
+    "## 3. Load Model and Tokenizer\n",
+    "\n",
+    "We specify the model ID and configure 4-bit quantization using `BitsAndBytesConfig`. This significantly reduces the memory footprint, making it possible to run Mistral 7B on a free Colab T4 GPU.\n",
+    "\n",
+    "* `load_in_4bit=True`: Enables 4-bit loading.\n",
+    "* `bnb_4bit_quant_type=\"nf4\"`: Specifies the type of 4-bit quantization (NF4 is often recommended).\n",
+    "* `bnb_4bit_compute_dtype=torch.float16`: Sets the computation data type during inference (float16 is efficient on GPUs).\n",
+    "* `device_map=\"auto\"`: Automatically places model parts on available devices (ideally the GPU)."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {
+      "id": "load-model-code"
+     },
+   "outputs": [],
+   "source": [
+    "# Define the model ID for Mistral 7B Instruct\n",
+    "model_id = \"mistralai/Mistral-7B-Instruct-v0.1\"\n",
+    "\n",
+    "# Configure quantization to load the model in 4-bit\n",
+    "quantization_config = BitsAndBytesConfig(\n",
+    "    load_in_4bit=True,\n",
+    "    bnb_4bit_quant_type=\"nf4\",\n",
+    "    bnb_4bit_compute_dtype=torch.float16,\n",
+    "    bnb_4bit_use_double_quant=False, # Optional\n",
+    ")\n",
+    "\n",
+    "# Load the tokenizer\n",
+    "print(f\"Loading tokenizer for model: {model_id}\")\n",
+    "tokenizer = AutoTokenizer.from_pretrained(model_id)\n",
+    "# Set padding token if it's not already set (Mistral doesn't have a default pad token)\n",
+    "if tokenizer.pad_token is None:\n",
+    "  tokenizer.pad_token = tokenizer.eos_token\n",
+    "print(\"Tokenizer loaded successfully.\")\n",
+    "\n",
+    "# Load the model with quantization\n",
+    "print(f\"Loading model: {model_id} with 4-bit quantization...\")\n",
+    "model = AutoModelForCausalLM.from_pretrained(\n",
+    "    model_id,\n",
+    "    quantization_config=quantization_config,\n",
+    "    device_map=\"auto\", # Automatically use GPU if available\n",
+    "    trust_remote_code=True # Sometimes needed depending on model implementation\n",
+    ")\n",
+    "print(\"Model loaded successfully.\")"
+    ]
+  },
+    {
+   "cell_type": "markdown",
+   "metadata": {
+        "id": "inference-func-markdown"
+       },
+   "source": [
+    "## 4. Define Inference Function\n",
+    "\n",
+    "This function takes a prompt string, formats it according to the Mistral Instruct template (using `<s>[INST] ... [/INST]`), tokenizes it, generates a response using the loaded model, and decodes the output back into text."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {
+    "id": "define-inference-func"
+   },
+   "outputs": [],
+   "source": [
+    "def run_mistral_inference(prompt, max_new_tokens=150, temperature=0.7, top_p=0.9):\n",
+    "    \"\"\"Generates text using the loaded Mistral model.\n",
+    "\n",
+    "    Args:\n",
+    "        prompt (str): The input text prompt.\n",
+    "        max_new_tokens (int): Max number of new tokens to generate.\n",
+    "        temperature (float): Controls randomness. Lower is more deterministic.\n",
+    "        top_p (float): Nucleus sampling probability.\n",
+    "\n",
+    "    Returns:\n",
+    "        str: The generated text response.\n",
+    "    \"\"\"\n",
+    "    # Format the prompt for Mistral Instruct\n",
+    "    # Reference: https://huggingface.co/mistralai/Mistral-7B-Instruct-v0.1#instruction-format\n",
+    "    formatted_prompt = f\"<s>[INST] {prompt} [/INST]\" # Wrap prompt in instruction tags\n",
+    "\n",
+    "    # Tokenize the input prompt\n",
+    "    # 'return_tensors=\"pt\"' returns PyTorch tensors\n",
+    "    # '.to(model.device)' moves the tensors to the same device as the model (GPU)\n",
+    "    inputs = tokenizer(formatted_prompt, return_tensors=\"pt\", truncation=True).to(model.device)\n",
+    "\n",
+    "    print(f\"\\n--- Generating Response for Prompt: ---\\n{prompt}\\n-------------------------------------\")\n",
+    "\n",
+    "    # Generate text\n",
+    "    with torch.no_grad(): # Disable gradient calculation for inference efficiency\n",
+    "        outputs = model.generate(\n",
+    "            **inputs,\n",
+    "            max_new_tokens=max_new_tokens,\n",
+    "            temperature=temperature,\n",
+    "            top_p=top_p,\n",
+    "            do_sample=True, # Enable sampling for diverse outputs\n",
+    "            pad_token_id=tokenizer.eos_token_id # Use EOS token for padding\n",
+    "        )\n",
+    "\n",
+    "    # Decode the generated token IDs back to text\n",
+    "    # 'skip_special_tokens=True' removes tokens like <s>, [INST], etc.\n",
+    "    # We only decode the newly generated tokens (excluding the input prompt tokens)\n",
+    "    response_ids = outputs[0][inputs['input_ids'].shape[1]:]\n",
+    "    response_text = tokenizer.decode(response_ids, skip_special_tokens=True)\n",
+    "\n",
+    "    print(\"--- Generation Complete ---\")\n",
+    "    return response_text.strip()\n"
+   ]
+  },
+   {
+   "cell_type": "markdown",
+   "metadata": {
+        "id": "run-inference-markdown"
+       },
+   "source": [
+    "## 5. Run Inference - Example Usage\n",
+    "\n",
+    "Now, let's test the function with a sample prompt."
+    ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {
+    "colab": {
+     "base_uri": "https://localhost:8080/"
+    },
+    "id": "run-inference-code",
+    "outputId": "f9e8d7c6-b5a4-3210-fedc-ba9876543210"
+   },
+   "outputs": [],
+   "source": [
+    "# Define your prompt here\n",
+    "my_prompt = \"Explain the concept of Large Language Models (LLMs) in simple terms.\"\n",
+    "\n",
+    "# Run inference\n",
+    "generated_response = run_mistral_inference(\n",
+    "    my_prompt,\n",
+    "    max_new_tokens=250, # Adjust length as needed\n",
+    "    temperature=0.6,    # Adjust creativity/randomness\n",
+    "    top_p=0.9\n",
+    ")\n",
+    "\n",
+    "# Print the result\n",
+    "print(\"\\n===== Generated Response =====\")\n",
+    "print(generated_response)\n",
+    "print(\"============================\")"
+   ]
+  },
+   {
+   "cell_type": "markdown",
+   "metadata": {
+        "id": "conclusion-markdown"
+       },
+   "source": [
+    "## 6. Conclusion\n",
+    "\n",
+    "You have successfully loaded the Mistral 7B Instruct model and generated text using it on Google Colab. You can now modify the `my_prompt` variable in the last code cell to ask different questions or give different instructions to the model.\n",
+    "\n",
+    "**Further Exploration:**\n",
+    "* Experiment with different `temperature` and `top_p` values in the `run_mistral_inference` call to see how they affect the output.\n",
+    "* Try adjusting `max_new_tokens` to control the length of the generated response.\n",
+    "* Explore other models available on the Hugging Face Hub."
+   ]
+  }
+ ]
+}

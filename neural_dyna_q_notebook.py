@@ -43,70 +43,152 @@
 
 # %% 
 # Check if running in Google Colab
+# Import necessary libraries for setup
+import os
 import sys
+import subprocess
+from pathlib import Path
+
+# Configuration settings for the setup process, particularly for Colab environments.
+SETUP_PATH_CONFIG = {
+    "repo_url": "https://github.com/cabradna/LLM-Planning-Recommendation-System.git"  # URL of the repository to clone.
+}
+
+# Configuration for enabling specific strategies during setup (e.g., LLM, hybrid).
+SETUP_STRATEGY_CONFIG = {
+    "llm": {"enabled": True},  # Enable LLM-related dependency installation.
+    "hybrid": {"enabled": False} # Enable hybrid strategy dependency installation.
+}
+
+# Determine if the code is running in Google Colab.
 IN_COLAB = 'google.colab' in sys.modules
 
 if IN_COLAB:
+    print("Running in Google Colab. Cloning repository and installing dependencies...")
+
     try:
-        # Get repository URL from configuration
-        repo_url = PATH_CONFIG["repo_url"]
-        
-        # Clone the repository using subprocess
-        import subprocess
-        subprocess.run(["git", "clone", repo_url], check=True)
-        os.chdir("LLM-Planning-Recommendation-System")
-        
-        # Install required packages
-        subprocess.run(["pip", "install", "-q", "-r", "requirements.txt"], check=True)
-        subprocess.run(["pip", "install", "-e", "."], check=True)
-        
-        # If we need to use LLM for simulation, install required packages
-        if STRATEGY_CONFIG["llm"]["enabled"] or STRATEGY_CONFIG["hybrid"]["enabled"]:
-            subprocess.run(["pip", "install", "-q", "transformers", "accelerate", "bitsandbytes"], check=True)
+        # Retrieve repository URL from configuration.
+        repo_url = SETUP_PATH_CONFIG["repo_url"]
+        repo_name = Path(repo_url).stem  # Extract repository name from the URL.
+
+        # Clone the repository.
+        print(f"Cloning repository: {repo_url}")
+        subprocess.run(["git", "clone", "-q", repo_url], check=True)  # Clone quietly and raise an error if cloning fails.
+
+        # Navigate into the cloned repository directory.
+        cloned_repo_path = Path(repo_name)
+        if cloned_repo_path.is_dir():
+            os.chdir(cloned_repo_path)
+            print(f"Changed directory to: {os.getcwd()}")
+        else:
+            raise FileNotFoundError(f"Cloned repository directory '{repo_name}' not found or is not a directory.")
+
+        # Install base requirements from requirements.txt.
+        requirements_path = Path("requirements.txt")
+        if requirements_path.is_file():
+            print("Installing base requirements from requirements.txt...")
+            subprocess.run([sys.executable, "-m", "pip", "install", "-q", "-r", str(requirements_path)], check=True)  # Use the correct pip and install quietly.
+        else:
+            print("Warning: requirements.txt not found. Skipping base requirements installation.")
+
+        # Install the project package in editable mode.
+        print("Attempting to install project package in editable mode...")
+        subprocess.run([sys.executable, "-m", "pip", "install", "-q", "-e", "."], check=True)  # Install the current package in editable mode.
+
+        # Install extra packages if LLM or hybrid strategy is enabled.
+        if SETUP_STRATEGY_CONFIG["llm"]["enabled"] or SETUP_STRATEGY_CONFIG["hybrid"]["enabled"]:
+            print("Installing LLM-related packages (transformers, accelerate, bitsandbytes)...")
+            subprocess.run([sys.executable, "-m", "pip", "install", "-q", "transformers", "accelerate", "bitsandbytes"], check=True)
             print("LLM-related packages installed successfully.")
-            
+
         print("Repository cloned and dependencies installed successfully.")
-    except Exception as e:
+
+        # Add the project root to the Python path.
+        project_root = Path(os.getcwd()).absolute()
+        if str(project_root) not in sys.path:
+            sys.path.insert(0, str(project_root))  # Insert at the beginning to prioritize project modules.
+            print(f"Added {project_root} to sys.path")
+
+    except subprocess.CalledProcessError as e:
+        print(f"Setup command failed: {e}")
+        print("Please check the repository URL, requirements file, setup.py, and Colab environment.")
+        raise  # Re-raise the exception to halt execution.
+    except FileNotFoundError as e:
         print(f"Setup error: {e}")
-        print("Continuing with local environment...")
+        raise  # Re-raise the exception to halt execution.
+else:
+    print("Not running in Google Colab. Assuming local environment is set up.")
+
+    try:
+        # Determine the project root directory.
+        project_root = Path(__file__).resolve().parent.parent
+    except NameError:
+        # Handle cases where __file__ is not defined (e.g., interactive environments).
+        project_root = Path('.').absolute()
+        print(f"Warning: __file__ not defined. Assuming project root is CWD: {project_root}")
+
+    # Add the project root to the Python path if it's not already there.
+    if str(project_root) not in sys.path:
+        sys.path.insert(0, str(project_root))
+        print(f"Added {project_root} to sys.path for local execution.")
+
 
 # %%
+# Standard imports for data manipulation, visualization, and deep learning
 # Standard imports for data manipulation, visualization, and deep learning
 import os
 import sys
 import numpy as np
 import matplotlib.pyplot as plt
 import random
-from tqdm import tqdm
+from tqdm.notebook import tqdm  # Use tqdm.notebook for Colab/notebook progress bars
 import torch
 from pathlib import Path
 
-# Add project root to Python path
-project_root = Path(__file__).parent.absolute()
-sys.path.append(str(project_root))
+# Dynamically add the project root to the Python path
+# This allows importing modules from the project's source code, regardless of the current working directory.
+try:
+    # Determine the project root directory based on the location of this script.
+    # Assumes the script is located in a subdirectory of the project root.
+    project_root = Path(__file__).resolve().parent.parent
+except NameError:
+    # Handle cases where __file__ is not defined, such as in interactive environments.
+    project_root = Path('.').absolute()
 
-# Import configuration
+# Add the project root to the Python path if it's not already there.
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))  # Prioritize project modules over installed ones
+
+# Import configuration settings from the project's config module
+# These settings define various aspects of the experiment, such as database connections,
+# model architectures, training parameters, and evaluation metrics.
 from config.config import (
     DB_CONFIG,
     MODEL_CONFIG,
     TRAINING_CONFIG,
     STRATEGY_CONFIG,
     PATH_CONFIG,
-    EVAL_CONFIG
+    EVAL_CONFIG,
+    HF_CONFIG
 )
 
-# Set random seeds for reproducibility across runs
+# Set random seeds for reproducibility
+# This ensures that the experiment produces consistent results across multiple runs,
+# which is essential for debugging and comparing different approaches.
 random.seed(TRAINING_CONFIG["random_seed"])
 np.random.seed(TRAINING_CONFIG["random_seed"])
 torch.manual_seed(TRAINING_CONFIG["random_seed"])
 if torch.cuda.is_available():
     torch.cuda.manual_seed_all(TRAINING_CONFIG["random_seed"])
 
-# Set device for PyTorch - use GPU if available for faster training
+# Determine the device to use for PyTorch computations (CPU or GPU)
+# If a GPU is available, it will be used to accelerate training.
 device = torch.device(TRAINING_CONFIG["device"])
 print(f"Using device: {device}")
 
-# Import project modules
+# Import project-specific modules
+# These modules contain the implementations of the various components of the system,
+# such as data loading, environment interaction, model architectures, and training algorithms.
 from src.data.database import DatabaseConnector
 from src.data.data_loader import JobRecommendationDataset, ReplayBuffer
 from src.environments.job_env import JobRecommendationEnv
@@ -117,7 +199,6 @@ from src.utils.visualizer import Visualizer
 from src.utils.evaluator import Evaluator
 
 print("Project modules imported successfully.")
-
 # %% [markdown]
 # ## 4. Database Connection
 # 
@@ -316,6 +397,23 @@ print(f"Environment initialized with {reward_strategy} reward strategy.")
 if STRATEGY_CONFIG["llm"]["enabled"] and IN_COLAB:
     try:
         from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+        from huggingface_hub import login
+        
+        # Authenticate with Hugging Face using token from file
+        try:
+            # Get token path from config
+            token_path = HF_CONFIG["token_path"]
+            
+            # Read the token from file
+            with open(token_path, "r") as f:
+                token = f.read().strip()
+                
+            # Login to Hugging Face
+            login(token=token)
+            print(f"Successfully logged in to Hugging Face using token from {token_path}")
+        except Exception as e:
+            print(f"Error authenticating with Hugging Face: {e}")
+            print("Will attempt to load model without authentication")
         
         # LLM configuration from config
         model_id = STRATEGY_CONFIG["llm"]["model_id"]
@@ -393,14 +491,14 @@ print(f"Starting pretraining with {reward_strategy} strategy...")
 
 # Generate pretraining data
 pretraining_data = []
-state = env.reset()
+state = env.reset(applicant_id=target_candidate_id)
 
 for i in tqdm(range(num_pretraining_samples), desc="Generating pretraining data"):
     job_idx = i % len(job_ids)
     job_id = job_ids[job_idx]
     job_vector = job_vectors_np[job_idx]
     
-    next_state, reward, done, _ = env.step(job_id)
+    next_state, reward, done, _ = env.step(job_idx)
     pretraining_data.append((state, job_vector, reward, next_state))
     state = next_state
 
@@ -410,7 +508,7 @@ actions = np.array([d[1] for d in pretraining_data])
 rewards = np.array([d[2] for d in pretraining_data])
 next_states = np.array([d[3] for d in pretraining_data])
 
-# Run pretraining using agent's interface
+# Run pretraining using agent's built-in pretrain method
 pretraining_metrics = agent.pretrain(
     states=states,
     actions=actions,
@@ -452,7 +550,8 @@ training_metrics = agent.train(
     env=env,
     num_episodes=num_episodes,
     max_steps_per_episode=max_steps_per_episode,
-    update_frequency=update_frequency
+    update_frequency=update_frequency,
+    applicant_ids=[target_candidate_id]
 )
 
 # Plot training metrics
@@ -481,13 +580,28 @@ baseline_strategy = EVAL_CONFIG["baseline_strategy"]
 
 print("Starting evaluation...")
 
-# Run evaluation using Evaluator
-evaluation_results = evaluator.evaluate_agent(
-    agent=agent,
-    env=env,
-    num_episodes=num_eval_episodes,
-    baseline_strategy=baseline_strategy
+# Create a baseline agent for comparison
+baseline_agent = DynaQAgent(
+    state_dim=MODEL_CONFIG["q_network"]["state_dim"],
+    action_dim=MODEL_CONFIG["q_network"]["action_dim"],
+    training_strategy=baseline_strategy,
+    device=device
 )
+
+# Use evaluator's compare_agents method which internally calls evaluate_agent
+comparison_results = evaluator.compare_agents(
+    baseline_agent=baseline_agent,
+    pretrained_agent=agent,
+    env=env,
+    applicant_ids=[target_candidate_id],
+    num_episodes=num_eval_episodes
+)
+
+# Extract the results for visualization
+evaluation_results = {
+    'agent_rewards': comparison_results['pretrained']['episode_rewards'],
+    'baseline_rewards': comparison_results['baseline']['episode_rewards']
+}
 
 # Plot evaluation results
 visualizer.plot_evaluation_results(
@@ -523,24 +637,33 @@ test_job_ids = job_ids.copy()
 test_job_vectors = job_vectors_np.copy()
 
 # Reset the environment to get the initial state
-state = env.reset()
+state = env.reset(applicant_id=target_candidate_id)
 
 # Generate top-K recommendations
 for _ in range(num_recommendations):
+    # Convert job vectors to tensor format
+    action_tensors = [torch.from_numpy(vector).float() for vector in test_job_vectors]
+    
     # Select best job according to Q-network
-    job_id, action, q_value = agent.select_action(
-        state, 
-        test_job_ids, 
-        test_job_vectors, 
-        epsilon=test_epsilon
-    )
+    action_idx, _ = agent.select_action(state, action_tensors, eval_mode=True)
+    
+    # Get the corresponding job_id and job_vector
+    job_id = test_job_ids[action_idx]
+    job_vector = test_job_vectors[action_idx]
+    
+    # Calculate Q-value for logging
+    with torch.no_grad():
+        q_value = agent.q_network(
+            torch.tensor(state, device=device).unsqueeze(0),
+            torch.from_numpy(job_vector).float().to(device).unsqueeze(0)
+        ).item()
+    
     recommended_jobs.append(job_id)
     recommendation_scores.append(q_value)
     
     # Remove selected job from consideration for next selection
-    job_idx = test_job_ids.index(job_id)
-    test_job_ids.pop(job_idx)
-    test_job_vectors = np.delete(test_job_vectors, job_idx, axis=0)
+    test_job_ids.pop(action_idx)
+    test_job_vectors = np.delete(test_job_vectors, action_idx, axis=0)
 
 # Display recommendations with details
 print("\n=== Top Job Recommendations ===\n")

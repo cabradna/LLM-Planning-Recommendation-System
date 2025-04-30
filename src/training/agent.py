@@ -11,7 +11,7 @@ import torch.optim as optim
 import numpy as np
 import random
 import logging
-from typing import Dict, List, Tuple, Optional, Any
+from typing import Dict, List, Tuple, Optional, Any, Union
 import os
 from pathlib import Path
 
@@ -287,6 +287,102 @@ class DynaQAgent:
         """
         self.target_network.load_state_dict(self.q_network.state_dict())
         logger.debug("Updated target network")
+    
+    def pretrain(self, states: Union[np.ndarray, torch.Tensor], 
+                 actions: Union[np.ndarray, torch.Tensor],
+                 rewards: Union[np.ndarray, torch.Tensor], 
+                 next_states: Union[np.ndarray, torch.Tensor],
+                 num_epochs: int, batch_size: int) -> Dict[str, List[float]]:
+        """
+        Pretrain the agent using a batch of experiences.
+        
+        Args:
+            states: Batch of state tensors or numpy arrays
+            actions: Batch of action tensors or numpy arrays
+            rewards: Batch of reward values or numpy arrays
+            next_states: Batch of next state tensors or numpy arrays
+            num_epochs: Number of training epochs
+            batch_size: Batch size for training
+            
+        Returns:
+            Dict[str, List[float]]: Dictionary of training metrics
+        """
+        # Convert to PyTorch tensors if they are numpy arrays
+        if isinstance(states, np.ndarray):
+            states = torch.from_numpy(states).float()
+        if isinstance(actions, np.ndarray):
+            actions = torch.from_numpy(actions).float()
+        if isinstance(rewards, np.ndarray):
+            rewards = torch.from_numpy(rewards).float()
+        if isinstance(next_states, np.ndarray):
+            next_states = torch.from_numpy(next_states).float()
+        
+        # Initialize metrics tracking
+        q_losses = []
+        world_losses = []
+        
+        # Dataset size
+        dataset_size = len(states)
+        
+        # Pretraining loop
+        for epoch in range(num_epochs):
+            # Shuffle indices
+            indices = torch.randperm(dataset_size)
+            
+            # Initialize epoch losses
+            epoch_q_loss = 0.0
+            epoch_world_loss = 0.0
+            
+            # Batch training
+            num_batches = 0
+            for start_idx in range(0, dataset_size, batch_size):
+                # Extract batch
+                end_idx = min(start_idx + batch_size, dataset_size)
+                batch_indices = indices[start_idx:end_idx]
+                
+                # Get batch data
+                batch_states = states[batch_indices]
+                batch_actions = actions[batch_indices]
+                batch_rewards = rewards[batch_indices]
+                batch_next_states = next_states[batch_indices]
+                
+                # Update Q-network
+                q_loss = self.update_q_network(
+                    batch_states, batch_actions, batch_rewards, batch_next_states
+                )
+                
+                # Update world model
+                world_loss = self.update_world_model(
+                    batch_states, batch_actions, batch_rewards
+                )
+                
+                # Update losses
+                epoch_q_loss += q_loss
+                epoch_world_loss += world_loss
+                num_batches += 1
+            
+            # Average losses for the epoch
+            epoch_q_loss /= num_batches if num_batches > 0 else 1
+            epoch_world_loss /= num_batches if num_batches > 0 else 1
+            
+            # Store metrics
+            q_losses.append(epoch_q_loss)
+            world_losses.append(epoch_world_loss)
+            
+            # Log progress
+            logger.info(f"Pretraining epoch {epoch+1}/{num_epochs}: Q-Loss={epoch_q_loss:.4f}, World-Loss={epoch_world_loss:.4f}")
+            
+            # Periodically update target network
+            if (epoch + 1) % self.target_update_freq == 0:
+                self.update_target_network()
+        
+        logger.info(f"Pretraining completed: {num_epochs} epochs, final Q-Loss={q_losses[-1]:.4f}, World-Loss={world_losses[-1]:.4f}")
+        
+        # Return metrics
+        return {
+            'q_losses': q_losses,
+            'world_losses': world_losses
+        }
     
     def plan(self, env: JobRecommendationEnv, planning_steps: Optional[int] = None) -> Dict[str, float]:
         """
