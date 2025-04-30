@@ -252,18 +252,19 @@ def get_applicant_state(applicant_id):
     return db.get_applicant_state(applicant_id)
 
 # Function to sample candidate jobs from the database
-def sample_candidate_jobs(n=TRAINING_CONFIG["num_jobs"], filter_criteria=None):
+def sample_candidate_jobs(n=TRAINING_CONFIG["num_jobs"], filter_criteria=None, validate_embeddings=False):
     """
     Sample a subset of jobs to be considered for recommendation.
     
     Args:
         n: Number of jobs to sample
         filter_criteria: Optional dictionary for filtering jobs
+        validate_embeddings: Boolean indicating whether to validate job embeddings
         
     Returns:
         List[Dict]: List of job documents
     """
-    return db.sample_candidate_jobs(n, filter_criteria)
+    return db.sample_candidate_jobs(n, filter_criteria, validate_embeddings)
 
 # Function to get job embedding vectors
 def get_job_vectors(job_ids):
@@ -308,10 +309,10 @@ try:
     candidate_embedding = get_applicant_state(target_candidate_id)
     print(f"Candidate embedding shape: {candidate_embedding.shape}")
     
-    # Sample jobs from the database
-    sampled_jobs = sample_candidate_jobs(n=TRAINING_CONFIG["num_jobs"])
+    # Sample jobs from the database with embedding validation to ensure all have required fields
+    sampled_jobs = sample_candidate_jobs(n=TRAINING_CONFIG["num_jobs"], validate_embeddings=True)
     job_ids = [job["_id"] for job in sampled_jobs]
-    print(f"Sampled {len(job_ids)} jobs from the database")
+    print(f"Sampled {len(job_ids)} jobs from the database (all with valid embeddings)")
     
     # Get job vectors for the sampled jobs
     job_vectors = get_job_vectors(job_ids)

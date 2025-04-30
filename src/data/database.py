@@ -139,16 +139,52 @@ class DatabaseConnector:
             logger.error(f"Error retrieving applicant state: {e}")
             raise
     
-    def sample_candidate_jobs(self, n: int = 100, filter_criteria: Optional[Dict] = None) -> List[Dict]:
+    def _validate_job_embeddings(self, job_id: str) -> bool:
+        """
+        Check if a job has all the required embedding fields.
+        
+        Args:
+            job_id: ID of the job to validate
+            
+        Returns:
+            bool: True if the job has all required embeddings, False otherwise
+        """
+        try:
+            # Query the job_embeddings collection
+            collection = self.db[self.collections["job_embeddings"]]
+            job_doc = collection.find_one({"original_job_id": job_id})
+            
+            if not job_doc:
+                logger.warning(f"No embedding document found for job ID: {job_id}")
+                return False
+            
+            # Check for required fields according to documentation
+            required_fields = ["job_title_embeddings", "tech_skills_vectors", "soft_skills_embeddings"]
+            
+            for field in required_fields:
+                if field not in job_doc or not job_doc[field] or len(job_doc[field]) == 0:
+                    logger.warning(f"Job {job_id} missing required field: {field}")
+                    return False
+            
+            # All required fields are present
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error validating job embeddings for {job_id}: {e}")
+            return False
+            
+    def sample_candidate_jobs(self, n: int = 100, filter_criteria: Optional[Dict] = None, 
+                              validate_embeddings: bool = False) -> List[Dict]:
         """
         Sample a subset of jobs to be considered as candidate actions.
         
         Args:
             n: Number of candidate jobs to sample.
             filter_criteria: Optional criteria to filter jobs.
+            validate_embeddings: If True, verify sampled jobs have all required embedding fields.
             
         Returns:
-            List[Dict]: List of job documents.
+            List[Dict]: List of job documents with valid embeddings.
         """
         try:
             # Define collection to query
@@ -158,15 +194,34 @@ class DatabaseConnector:
             # Apply filter if provided, otherwise get random sample
             query = filter_criteria or {}
             
+            # If validation is requested, sample more jobs than needed to account for potential invalid ones
+            sample_size = n * 2 if validate_embeddings else n
+            
             # Perform aggregation to get random sample
             pipeline = [
                 {"$match": query},
-                {"$sample": {"size": n}}
+                {"$sample": {"size": sample_size}}
             ]
             
-            jobs = list(collection.aggregate(pipeline))
-            logger.info(f"Sampled {len(jobs)} candidate jobs from {collection_name}")
-            return jobs
+            sampled_jobs = list(collection.aggregate(pipeline))
+            
+            if validate_embeddings:
+                # Filter to jobs with valid embeddings
+                valid_jobs = []
+                for job in sampled_jobs:
+                    if self._validate_job_embeddings(job["_id"]):
+                        valid_jobs.append(job)
+                        if len(valid_jobs) >= n:
+                            break
+                
+                if len(valid_jobs) < n:
+                    logger.warning(f"Only found {len(valid_jobs)} valid jobs out of {len(sampled_jobs)} sampled. "
+                                  f"Requested {n} jobs.")
+                    
+                sampled_jobs = valid_jobs
+            
+            logger.info(f"Sampled {len(sampled_jobs)} candidate jobs from {collection_name}")
+            return sampled_jobs
             
         except Exception as e:
             logger.error(f"Error sampling candidate jobs: {e}")
@@ -196,29 +251,39 @@ class DatabaseConnector:
                 job_id = emb_doc["original_job_id"]
                 retrieved_ids.add(job_id)
                 
-                # Extract required embeddings - these must be present in the db
-                v_job_title = torch.tensor(emb_doc.get("job_title_embeddings", []))
-                v_job_skills = torch.tensor(emb_doc.get("tech_skills_vectors", []))
-                v_soft_skills = torch.tensor(emb_doc.get("soft_skills_embeddings", []))
+                # Extract embeddings from the document
+                v_job_title = torch.tensor(emb_doc.get("job_title_embeddings", []), dtype=torch.float)
+                v_job_skills = torch.tensor(emb_doc.get("tech_skills_vectors", []), dtype=torch.float)
+                v_soft_skills = torch.tensor(emb_doc.get("soft_skills_embeddings", []), dtype=torch.float)
                 
                 # Handle potentially missing experience_requirements_embeddings
                 if "experience_requirements_embeddings" in emb_doc and len(emb_doc["experience_requirements_embeddings"]) > 0:
-                    v_experience = torch.tensor(emb_doc["experience_requirements_embeddings"])
+                    v_experience = torch.tensor(emb_doc["experience_requirements_embeddings"], dtype=torch.float)
                 else:
                     # Fallback: use zero vector of expected dimension
                     logger.warning(f"Missing experience_requirements_embeddings for job {job_id}. Using zero vector.")
-                    v_experience = torch.zeros(384)
+                    v_experience = torch.zeros(384, dtype=torch.float)
                 
-                # Verify dimensions
-                expected_dim = 384  # Each embedding should be 384-dimensional
-                for name, vec in [
-                    ("job title", v_job_title),
-                    ("tech skills", v_job_skills),
-                    ("experience", v_experience),
-                    ("soft skills", v_soft_skills)
-                ]:
-                    if vec.shape[0] != expected_dim:
-                        raise ValueError(f"Invalid dimension for {name} embedding: got {vec.shape[0]}, expected {expected_dim}")
+                # Ensure each vector has correct dimensions (384) for consistent concatenation
+                # If vectors are non-empty but incorrect dimension, this would be a data quality issue
+                if len(v_job_title) > 0 and v_job_title.shape[0] != 384:
+                    raise ValueError(f"Job title embedding dimension mismatch for job {job_id}: {v_job_title.shape[0]} vs expected 384")
+                    
+                if len(v_job_skills) > 0 and v_job_skills.shape[0] != 384:
+                    raise ValueError(f"Tech skills embedding dimension mismatch for job {job_id}: {v_job_skills.shape[0]} vs expected 384")
+                    
+                if len(v_soft_skills) > 0 and v_soft_skills.shape[0] != 384:
+                    raise ValueError(f"Soft skills embedding dimension mismatch for job {job_id}: {v_soft_skills.shape[0]} vs expected 384")
+                
+                # If vectors are empty but required, this is a critical issue
+                if len(v_job_title) == 0:
+                    raise ValueError(f"Missing required job_title_embeddings for job {job_id}")
+                    
+                if len(v_job_skills) == 0:
+                    raise ValueError(f"Missing required tech_skills_vectors for job {job_id}")
+                    
+                if len(v_soft_skills) == 0:
+                    raise ValueError(f"Missing required soft_skills_embeddings for job {job_id}")
                 
                 # Combine into a single vector
                 v_job = torch.cat([
