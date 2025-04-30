@@ -509,6 +509,18 @@ actions = np.array([d[1] for d in pretraining_data])
 rewards = np.array([d[2] for d in pretraining_data])
 next_states = np.array([d[3] for d in pretraining_data])
 
+# Verify dimensions
+print(f"States shape: {states.shape}")
+print(f"Actions shape: {actions.shape}")
+print(f"Expected state_dim: {MODEL_CONFIG['q_network']['state_dim']}")
+print(f"Expected action_dim: {MODEL_CONFIG['q_network']['action_dim']}")
+
+# Ensure states and actions have correct dimensions
+if states.shape[1] != MODEL_CONFIG['q_network']['state_dim']:
+    raise ValueError(f"State dimension mismatch. Got {states.shape[1]}, expected {MODEL_CONFIG['q_network']['state_dim']}")
+if actions.shape[1] != MODEL_CONFIG['q_network']['action_dim']:
+    raise ValueError(f"Action dimension mismatch. Got {actions.shape[1]}, expected {MODEL_CONFIG['q_network']['action_dim']}")
+
 # Run pretraining using agent's built-in pretrain method
 pretraining_metrics = agent.pretrain(
     states=states,
