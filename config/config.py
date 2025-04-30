@@ -16,9 +16,9 @@ DB_CONFIG = {
     "database": "rl_jobsdb",
     "collections": {
         "jobs_text": "jobs_text",
-        "jobs_vectors": "jobs_vectors",
+        "job_embeddings": "job_embeddings",
         "candidates_text": "candidates_text",
-        "candidates_vectors": "candidates_vectors"
+        "candidates_embeddings": "candidates_embeddings"
     },
     "username": "default_user",  # Replace with actual username
     "password": "default_password",  # Replace with actual password
