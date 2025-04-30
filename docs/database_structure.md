@@ -60,7 +60,7 @@
     "_id": ObjectId,                            // MongoDB unique identifier
     "original_candidate_id": ObjectId,          // Reference to candidate in candidates_text collection
     "hard_skill_embeddings": Array<Number>,     // Embedding representation of handidate technical or hard skills
-    "soft_skill_embeddings": Array<Number>      // Embedding representation of candidate hard or soft skills
+    "soft_skills_embeddings": Array<Number>      // Embedding representation of candidate hard or soft skills
 }
 ```
 

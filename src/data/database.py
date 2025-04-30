@@ -125,7 +125,7 @@ class DatabaseConnector:
             
             # Extract and combine embeddings
             hard_skills_embedding = torch.tensor(candidate_data.get("hard_skill_embeddings", []))
-            soft_skills_embedding = torch.tensor(candidate_data.get("soft_skill_embeddings", []))
+            soft_skills_embedding = torch.tensor(candidate_data.get("soft_skills_embeddings", []))
             
             # Concatenate embeddings
             applicant_state = torch.cat([
