@@ -92,7 +92,7 @@ class JobRecommendationEnv:
         self.candidate_jobs = self.db.sample_candidate_jobs(n=100)  # Adjust sample size as needed
         
         # Extract job IDs
-        job_ids = [job.get("original_job_id") for job in self.candidate_jobs]
+        job_ids = [job["_id"] for job in self.candidate_jobs]
         
         # Create mapping from job ID to index
         self.job_id_to_idx = {job_id: idx for idx, job_id in enumerate(job_ids)}

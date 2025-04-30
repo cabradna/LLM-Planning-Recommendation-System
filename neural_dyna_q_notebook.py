@@ -130,15 +130,20 @@ print("Project modules imported successfully.")
 # The connection is established using environment variables for credentials.
 
 # %%
-# Create a database connector to access MongoDB Atlas
+# Get reward strategy settings from config
+if not STRATEGY_CONFIG["hybrid"]["enabled"]:
+    raise ValueError("Hybrid strategy is not enabled in config")
+
+reward_strategy = "hybrid"  # Default to hybrid strategy
+cosine_weight = STRATEGY_CONFIG["hybrid"]["initial_cosine_weight"]
+
+# Initialize database connector
 try:
-    # Initialize database connector using configuration
-    db_connector = DatabaseConnector()  # Uses default connection string and db name from config
+    db = DatabaseConnector()  # Uses default connection string and db name from config
     print("Database connection established successfully.")
 except Exception as e:
     print(f"Database connection error: {e}")
-    print("Please ensure MongoDB Atlas credentials are properly set in environment variables.")
-    print("Continuing with local environment...")
+    raise
 
 # %% [markdown]
 # ## 5. Data Loading
@@ -162,7 +167,7 @@ def get_applicant_state(applicant_id):
     Returns:
         torch.Tensor: State vector representing the candidate's skills and attributes
     """
-    return db_connector.get_applicant_state(applicant_id)
+    return db.get_applicant_state(applicant_id)
 
 # Function to sample candidate jobs from the database
 def sample_candidate_jobs(n=TRAINING_CONFIG["num_jobs"], filter_criteria=None):
@@ -176,7 +181,7 @@ def sample_candidate_jobs(n=TRAINING_CONFIG["num_jobs"], filter_criteria=None):
     Returns:
         List[Dict]: List of job documents
     """
-    return db_connector.sample_candidate_jobs(n, filter_criteria)
+    return db.sample_candidate_jobs(n, filter_criteria)
 
 # Function to get job embedding vectors
 def get_job_vectors(job_ids):
@@ -189,7 +194,7 @@ def get_job_vectors(job_ids):
     Returns:
         List[torch.Tensor]: List of job embedding vectors
     """
-    return db_connector.get_job_vectors(job_ids)
+    return db.get_job_vectors(job_ids)
 
 # %% [markdown]
 # ## 6. Select a Target Candidate and Fetch Jobs
@@ -205,7 +210,7 @@ def get_job_vectors(job_ids):
 # Query the database to get a list of candidate IDs
 try:
     # Get the candidates_text collection
-    collection = db_connector.db[db_connector.collections["candidates_text"]]
+    collection = db.db[db.collections["candidates_text"]]
     
     # Query for candidate IDs (limit to 10 for demonstration)
     candidate_ids = [doc["_id"] for doc in collection.find({}, {"_id": 1}).limit(TRAINING_CONFIG["num_candidates"])]
@@ -250,7 +255,7 @@ except Exception as e:
 # Each network is configured according to the parameters specified in the configuration file.
 
 # %%
-# Initialize Q-Network for value function approximation
+# Initialize Q-Network
 q_network = QNetwork(
     state_dim=MODEL_CONFIG["q_network"]["state_dim"],
     action_dim=MODEL_CONFIG["q_network"]["action_dim"],
@@ -259,82 +264,56 @@ q_network = QNetwork(
     activation=MODEL_CONFIG["q_network"]["activation"]
 ).to(device)
 
-# Initialize target Q-Network (copy of Q-Network)
-target_q_network = QNetwork(
-    state_dim=MODEL_CONFIG["q_network"]["state_dim"],
-    action_dim=MODEL_CONFIG["q_network"]["action_dim"],
-    hidden_dims=MODEL_CONFIG["q_network"]["hidden_dims"],
-    dropout_rate=MODEL_CONFIG["q_network"]["dropout_rate"],
-    activation=MODEL_CONFIG["q_network"]["activation"]
-).to(device)
-
-# Copy parameters from q_network to target_q_network
-target_q_network.load_state_dict(q_network.state_dict())
-target_q_network.eval()  # Set to evaluation mode (no gradient updates)
-
-# Initialize World Model for environment dynamics prediction
+# Initialize World Model
 world_model = WorldModel(
-    input_dim=MODEL_CONFIG["world_model"]["input_dim"],  # Use config value directly
+    input_dim=MODEL_CONFIG["world_model"]["input_dim"],
     hidden_dims=MODEL_CONFIG["world_model"]["hidden_dims"],
     dropout_rate=MODEL_CONFIG["world_model"]["dropout_rate"],
     activation=MODEL_CONFIG["world_model"]["activation"]
 ).to(device)
 
-# Initialize optimizers for neural networks
-learning_rate_q = TRAINING_CONFIG["lr"]
-learning_rate_world = TRAINING_CONFIG["lr"]
-q_optimizer = torch.optim.Adam(q_network.parameters(), lr=learning_rate_q)
-world_optimizer = torch.optim.Adam(world_model.parameters(), lr=learning_rate_world)
-
-print("Models initialized successfully.")
-
-# %% [markdown]
-# ## 8. Environment Setup
-# 
-# Now we'll set up the job recommendation environment, which simulates interactions between candidates and job recommendations. The environment:
-# 
-# 1. Maintains the state of the candidate
-# 2. Processes job recommendation actions
-# 3. Computes rewards based on the selected strategy
-# 4. Returns the next state after each action
-# 
-# We can use different reward strategies:
-# - **Cosine similarity**: Direct semantic matching between candidate and job embeddings
-# - **LLM feedback**: Using a language model to simulate candidate responses
-# - **Hybrid**: A combination of cosine similarity and LLM feedback
-
-# %%
-# Get reward strategy settings from config
-reward_strategy = STRATEGY_CONFIG["reward_strategy"]
-
-# If using hybrid strategy, set the weight for cosine similarity
-cosine_weight = STRATEGY_CONFIG["hybrid"]["initial_cosine_weight"] if reward_strategy == "hybrid" else None
-
-# Determine if we need to use an LLM for reward calculation
-use_llm = reward_strategy in ["llm", "hybrid"]
-
-# Initialize the job recommendation environment
-env = JobRecommendationEnv(
-    candidate_embedding=candidate_embedding.cpu().numpy(),
-    job_vectors=job_vectors_np,
-    job_ids=job_ids,
-    reward_strategy=reward_strategy,
-    cosine_weight=cosine_weight,
-    use_llm=use_llm,
-    device=device
+# Initialize DynaQAgent
+agent = DynaQAgent(
+    state_dim=MODEL_CONFIG["q_network"]["state_dim"],
+    action_dim=MODEL_CONFIG["q_network"]["action_dim"],
+    q_network=q_network,
+    world_model=world_model,
+    training_strategy=reward_strategy,
+    device=device,
+    target_applicant_id=target_candidate_id
 )
+
+# Initialize Visualizer
+visualizer = Visualizer()
+
+# Initialize Evaluator
+evaluator = Evaluator()
+
+# Initialize environment with required parameters
+env = JobRecommendationEnv(
+    db_connector=db,
+    reward_strategy=reward_strategy,
+    random_seed=TRAINING_CONFIG["random_seed"]
+)
+
+# Set the target candidate ID for the environment
+env.reset(applicant_id=target_candidate_id)
+
+# Verify environment initialization
+if not hasattr(env, 'current_state'):
+    raise ValueError("Environment initialization failed - missing current_state")
 
 print(f"Environment initialized with {reward_strategy} reward strategy.")
 
 # %% [markdown]
-# ## 9. LLM Integration (If Using LLM-Based Reward Strategy)
+# ## 8. LLM Integration (If Using LLM-Based Reward Strategy)
 # 
 # If we're using an LLM-based reward strategy (either "llm" or "hybrid"), we need to set up a language model to simulate candidate responses to job recommendations. This helps in generating more realistic rewards based on semantic understanding of both candidate profiles and job descriptions.
 # 
 # Note: This section will only execute if we're using an LLM-based strategy and running in a Colab environment with sufficient resources.
 
 # %%
-if use_llm and IN_COLAB:
+if STRATEGY_CONFIG["llm"]["enabled"] and IN_COLAB:
     try:
         from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
         
@@ -372,299 +351,152 @@ if use_llm and IN_COLAB:
         env.use_llm = False
 
 # %% [markdown]
-# ## 10. Replay Buffer Setup
+# ## 10. Training Setup
 # 
-# The replay buffer stores experiences (state, action, reward, next_state) that the agent encounters during training. This allows:
-# 
-# 1. More efficient use of experiences through batch learning
-# 2. Breaking correlation between sequential experiences
-# 3. Stabilizing the learning process
-# 
-# We'll also initialize the Dyna-Q agent, which combines the Q-Network, World Model, and replay buffer to implement the Dyna-Q algorithm.
+# We'll now set up the training process using the DynaQAgent's built-in training interface.
+# The agent handles:
+# 1. Experience replay buffer
+# 2. Q-Network and World Model updates
+# 3. Loss tracking and metrics
+# 4. Model checkpointing
 
 # %%
-# Initialize replay buffer with capacity from config
-buffer_capacity = TRAINING_CONFIG["replay_buffer_size"]
-replay_buffer = ReplayBuffer(capacity=buffer_capacity)
-print(f"Replay buffer initialized with capacity {buffer_capacity}.")
-
-# Initialize the Dyna-Q agent
+# Initialize the DynaQAgent with all required components
 agent = DynaQAgent(
     state_dim=MODEL_CONFIG["q_network"]["state_dim"],
     action_dim=MODEL_CONFIG["q_network"]["action_dim"],
     q_network=q_network,
-    target_q_network=target_q_network,
     world_model=world_model,
-    q_optimizer=q_optimizer,
-    world_optimizer=world_optimizer,
-    replay_buffer=replay_buffer,
-    device=device
+    training_strategy=reward_strategy,
+    device=device,
+    target_applicant_id=target_candidate_id
 )
+
 print("Dyna-Q agent initialized successfully.")
 
 # %% [markdown]
 # ## 11. Pretraining Phase
 # 
-# In the pretraining phase, we generate a dataset of experiences and train both the Q-network and world model using supervised learning. This helps to:
-# 
-# 1. Initialize the networks with reasonable parameters
-# 2. Address the cold-start problem
-# 3. Provide a baseline for further learning
-# 
-# We'll generate experiences using the environment's reward function and then train the networks on batches of these experiences.
+# In the pretraining phase, we'll use the agent's built-in pretraining method to:
+# 1. Generate initial experiences
+# 2. Train the Q-network and world model
+# 3. Track training metrics
+# 4. Save model checkpoints
 
 # %%
-# Define pretraining hyperparameters from config
+# Define pretraining parameters from config
 num_pretraining_samples = min(TRAINING_CONFIG["pretraining"]["num_samples"], len(job_ids))
-batch_size = TRAINING_CONFIG["batch_size"]
 num_pretraining_epochs = TRAINING_CONFIG["pretraining"]["num_epochs"]
+batch_size = TRAINING_CONFIG["batch_size"]
 
 print(f"Starting pretraining with {reward_strategy} strategy...")
 
-# Initialize datasets to store experiences
-pretraining_states = []
-pretraining_actions = []
-pretraining_rewards = []
-pretraining_next_states = []
-
-# Reset the environment to get the initial state
+# Generate pretraining data
+pretraining_data = []
 state = env.reset()
 
-# Generate experiences by sampling jobs and observing rewards
 for i in tqdm(range(num_pretraining_samples), desc="Generating pretraining data"):
-    # Sample a job (cycle through jobs if needed)
     job_idx = i % len(job_ids)
     job_id = job_ids[job_idx]
     job_vector = job_vectors_np[job_idx]
     
-    # Get reward using the environment's reward function
     next_state, reward, done, _ = env.step(job_id)
-    
-    # Store the experience
-    pretraining_states.append(state)
-    pretraining_actions.append(job_vector)
-    pretraining_rewards.append(reward)
-    pretraining_next_states.append(next_state)
-    
-    # Set next state as current state for next iteration
+    pretraining_data.append((state, job_vector, reward, next_state))
     state = next_state
 
-# Convert to numpy arrays for efficient processing
-pretraining_states = np.array(pretraining_states)
-pretraining_actions = np.array(pretraining_actions)
-pretraining_rewards = np.array(pretraining_rewards)
-pretraining_next_states = np.array(pretraining_next_states)
+# Convert to numpy arrays
+states = np.array([d[0] for d in pretraining_data])
+actions = np.array([d[1] for d in pretraining_data])
+rewards = np.array([d[2] for d in pretraining_data])
+next_states = np.array([d[3] for d in pretraining_data])
 
-# Create PyTorch dataset for batch training
-pretrain_dataset = JobRecommendationDataset(
-    states=pretraining_states,
-    actions=pretraining_actions,
-    rewards=pretraining_rewards,
-    next_states=pretraining_next_states
+# Run pretraining using agent's interface
+pretraining_metrics = agent.pretrain(
+    states=states,
+    actions=actions,
+    rewards=rewards,
+    next_states=next_states,
+    num_epochs=num_pretraining_epochs,
+    batch_size=batch_size
 )
 
-# Create data loader for batch processing
-pretrain_loader = torch.utils.data.DataLoader(
-    pretrain_dataset,
-    batch_size=batch_size,
-    shuffle=True
+# Plot pretraining metrics
+visualizer.plot_training_metrics(
+    q_losses=pretraining_metrics['q_losses'],
+    world_losses=pretraining_metrics['world_losses'],
+    title="Pretraining Losses"
 )
 
-print(f"Pretraining dataset created with {len(pretrain_dataset)} samples.")
+print("Pretraining completed successfully.")
 
 # %% [markdown]
-# ### 11.1 Pretrain Q-Network and World Model
+# ## 12. Main Training Loop
 # 
-# Now we'll train our models on the pretraining dataset. For each epoch, we:
-# 
-# 1. Process batches of experiences
-# 2. Update the Q-Network to predict expected returns
-# 3. Update the World Model to predict next states and rewards
-# 4. Track and report loss metrics
-# 
-# This pretraining gives the models a head start before online learning.
+# Now we'll run the main training loop using the agent's training interface.
+# The agent will:
+# 1. Interact with the environment
+# 2. Store experiences in its replay buffer
+# 3. Update networks using the stored experiences
+# 4. Track and report training metrics
 
 # %%
-# Initialize lists to track loss metrics
-q_losses = []
-world_losses = []
-gamma = TRAINING_CONFIG["gamma"]  # Discount factor for future rewards
-
-# Training loop for pretraining
-for epoch in range(num_pretraining_epochs):
-    epoch_q_loss = 0
-    epoch_world_loss = 0
-    
-    # Process batches of experiences
-    for batch in tqdm(pretrain_loader, desc=f"Pretraining Epoch {epoch+1}/{num_pretraining_epochs}"):
-        # Get batch data and transfer to device
-        states, actions, rewards, next_states = [b.to(device) for b in batch]
-        
-        # Update Q-Network to predict expected returns
-        q_loss = agent.update_q_network(states, actions, rewards, next_states, gamma)
-        
-        # Update World Model to predict next states and rewards
-        world_loss = agent.update_world_model(states, actions, rewards, next_states)
-        
-        # Accumulate losses for this epoch
-        epoch_q_loss += q_loss.item()
-        epoch_world_loss += world_loss.item()
-    
-    # Calculate average losses for this epoch
-    avg_q_loss = epoch_q_loss / len(pretrain_loader)
-    avg_world_loss = epoch_world_loss / len(pretrain_loader)
-    
-    # Store losses for visualization
-    q_losses.append(avg_q_loss)
-    world_losses.append(avg_world_loss)
-    
-    # Report progress
-    print(f"Epoch {epoch+1}/{num_pretraining_epochs} - Q-Loss: {avg_q_loss:.4f}, World-Loss: {avg_world_loss:.4f}")
-
-# Visualize training progress
-plt.figure(figsize=(12, 5))
-
-# Plot Q-Network loss
-plt.subplot(1, 2, 1)
-plt.plot(q_losses)
-plt.title("Q-Network Loss During Pretraining")
-plt.xlabel("Epoch")
-plt.ylabel("Loss")
-
-# Plot World Model loss
-plt.subplot(1, 2, 2)
-plt.plot(world_losses)
-plt.title("World Model Loss During Pretraining")
-plt.xlabel("Epoch")
-plt.ylabel("Loss")
-
-plt.tight_layout()
-plt.show()
-
-# %% [markdown]
-# ## 12. Online Learning Phase (Dyna-Q)
-# 
-# Now we'll implement the full Dyna-Q algorithm, which combines:
-# 
-# 1. **Direct RL**: Learning from actual experiences in the environment
-# 2. **Model-Based Planning**: Using the world model to simulate experiences
-# 3. **Exploration**: Using an epsilon-greedy policy to balance exploration and exploitation
-# 
-# This phase allows the agent to refine its policy based on both real and simulated experiences.
-
-# %%
-# Define Dyna-Q hyperparameters from config
+# Training parameters from config
 num_episodes = TRAINING_CONFIG["num_episodes"]
 max_steps_per_episode = TRAINING_CONFIG["max_steps_per_episode"]
-num_planning_steps = TRAINING_CONFIG["planning_steps"]
-target_update_freq = TRAINING_CONFIG["target_update_freq"]
-gamma = TRAINING_CONFIG["gamma"]
-epsilon_start = TRAINING_CONFIG["epsilon_start"]
-epsilon_end = TRAINING_CONFIG["epsilon_end"]
-epsilon_decay = TRAINING_CONFIG["epsilon_decay"]
+update_frequency = TRAINING_CONFIG["update_frequency"]
 
-# Lists to store metrics for evaluation
-episode_rewards = []
-avg_q_values = []
+print("Starting main training loop...")
 
-# Training loop over episodes
-for episode in range(num_episodes):
-    # Reset environment and calculate epsilon for this episode
-    state = env.reset()
-    epsilon = max(epsilon_end, epsilon_start * (epsilon_decay ** episode))
-    
-    # Initialize metrics for this episode
-    total_reward = 0
-    total_q_value = 0
-    
-    # Episode loop over steps
-    for step in range(max_steps_per_episode):
-        # Select action using epsilon-greedy policy
-        if np.random.random() < epsilon:
-            # Exploration: select random job
-            job_idx = np.random.randint(0, len(job_ids))
-            job_id = job_ids[job_idx]
-            action = job_vectors_np[job_idx]
-            q_value = 0  # No Q-value for random action
-        else:
-            # Exploitation: select best job according to Q-network
-            job_id, action, q_value = agent.select_action(
-                state, 
-                job_ids, 
-                job_vectors_np, 
-                epsilon=0  # No exploration within select_action
-            )
-        
-        # Track Q-value for this step
-        total_q_value += q_value
-        
-        # Take action in environment and observe results
-        next_state, reward, done, _ = env.step(job_id)
-        total_reward += reward
-        
-        # Store experience in replay buffer
-        agent.replay_buffer.add(state, action, reward, next_state)
-        
-        # Direct RL update (if enough experiences are available)
-        if len(agent.replay_buffer) >= batch_size:
-            agent.update_from_replay_buffer(batch_size, gamma)
-        
-        # Planning phase (Dyna-Q) - using world model to simulate experiences
-        agent.planning(num_planning_steps, gamma)
-        
-        # Update target network periodically for stable learning
-        if step % target_update_freq == 0:
-            agent.update_target_network()
-        
-        # Move to next state
-        state = next_state
-        
-        # End episode if done signal received
-        if done:
-            break
-    
-    # Calculate average Q-value for this episode
-    avg_q_value = total_q_value / max_steps_per_episode
-    
-    # Store episode metrics for visualization
-    episode_rewards.append(total_reward)
-    avg_q_values.append(avg_q_value)
-    
-    # Report episode stats
-    print(f"Episode {episode+1}/{num_episodes} - Reward: {total_reward:.4f}, Avg Q-Value: {avg_q_value:.4f}, Epsilon: {epsilon:.4f}")
+# Run training using agent's interface
+training_metrics = agent.train(
+    env=env,
+    num_episodes=num_episodes,
+    max_steps_per_episode=max_steps_per_episode,
+    update_frequency=update_frequency
+)
+
+# Plot training metrics
+visualizer.plot_training_metrics(
+    q_losses=training_metrics['q_losses'],
+    world_losses=training_metrics['world_losses'],
+    rewards=training_metrics['episode_rewards'],
+    title="Training Metrics"
+)
+
+print("Training completed successfully.")
 
 # %% [markdown]
-# ## 13. Evaluation and Visualization
+# ## 13. Evaluation
 # 
-# Let's evaluate our trained model and visualize the learning progress. We'll look at:
-# 
-# 1. Episode rewards over time - indicates how well the agent is performing
-# 2. Average Q-values over time - indicates the agent's confidence in its actions
-# 
-# These metrics help us understand the learning dynamics and performance of our agent.
+# Finally, we'll evaluate the trained agent using the Evaluator class.
+# This will:
+# 1. Test the agent on a set of evaluation episodes
+# 2. Compare performance against baseline
+# 3. Generate evaluation metrics and visualizations
 
 # %%
-# Create visualization of training metrics
-plt.figure(figsize=(12, 5))
+# Evaluation parameters from config
+num_eval_episodes = EVAL_CONFIG["num_episodes"]
+baseline_strategy = EVAL_CONFIG["baseline_strategy"]
 
-# Plot episode rewards
-plt.subplot(1, 2, 1)
-plt.plot(episode_rewards)
-plt.title("Total Reward per Episode")
-plt.xlabel("Episode")
-plt.ylabel("Total Reward")
-plt.grid(True, alpha=0.3)
+print("Starting evaluation...")
 
-# Plot average Q-values
-plt.subplot(1, 2, 2)
-plt.plot(avg_q_values)
-plt.title("Average Q-Value per Episode")
-plt.xlabel("Episode")
-plt.ylabel("Avg Q-Value")
-plt.grid(True, alpha=0.3)
+# Run evaluation using Evaluator
+evaluation_results = evaluator.evaluate_agent(
+    agent=agent,
+    env=env,
+    num_episodes=num_eval_episodes,
+    baseline_strategy=baseline_strategy
+)
 
-plt.tight_layout()
-plt.show()
+# Plot evaluation results
+visualizer.plot_evaluation_results(
+    agent_rewards=evaluation_results['agent_rewards'],
+    baseline_rewards=evaluation_results['baseline_rewards'],
+    title="Evaluation Results"
+)
+
+print("Evaluation completed successfully.")
 
 # %% [markdown]
 # ## 14. Generate Job Recommendations
@@ -718,7 +550,7 @@ for i, (job_id, score) in enumerate(zip(recommended_jobs, recommendation_scores)
     
     # Retrieve and display job details
     try:
-        job_details = db_connector.get_job_details(job_id)
+        job_details = db.get_job_details(job_id)
         print(f"Title: {job_details.get('job_title', 'N/A')}")
         
         # Display truncated description
@@ -760,6 +592,6 @@ for i, (job_id, score) in enumerate(zip(recommended_jobs, recommendation_scores)
 
 # %%
 # Clean up resources
-db_connector.close()
+db.close()
 print("Database connection closed.")
 print("Notebook execution complete.")
