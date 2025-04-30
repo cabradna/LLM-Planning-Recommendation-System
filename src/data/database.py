@@ -199,7 +199,15 @@ class DatabaseConnector:
                 # Extract and combine embeddings
                 v_job_title = torch.tensor(emb_doc.get("job_title_embeddings", []))
                 v_job_skills = torch.tensor(emb_doc.get("tech_skills_vectors", []))
-                v_experience = torch.tensor(emb_doc.get("experience_requirements_vectors", []))
+                
+                # Handle potentially missing experience_requirements_vectors
+                if "experience_requirements_vectors" in emb_doc and len(emb_doc["experience_requirements_vectors"]) > 0:
+                    v_experience = torch.tensor(emb_doc["experience_requirements_vectors"])
+                else:
+                    # Fallback: use zero vector of expected dimension
+                    logger.warning(f"Missing experience_requirements_vectors for job {job_id}. Using zero vector.")
+                    v_experience = torch.zeros(384)
+                
                 v_soft_skills = torch.tensor(emb_doc.get("soft_skills_vectors", []))
                 
                 # Verify dimensions

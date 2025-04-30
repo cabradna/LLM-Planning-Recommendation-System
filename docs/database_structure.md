@@ -1,4 +1,3 @@
-
 # MongoDB Database Structure Overview
 
 ## Database: `rl_jobsdb`
@@ -35,8 +34,14 @@
     "job_title_embeddings": Array<Number>, // Vector representation of job title
     "tech_skills_vectors": Array<Number>   // Vector representation of technical skills
     "soft_skills_embeddings": Array<Number> // Vector representation of soft skills
+    "experience_requirements_embeddings": Array<Number> // Vector representation of experience requirements
 }
 ```
+
+**Note on Embeddings**:
+- `job_title_embeddings`, `tech_skills_vectors`, and `soft_skills_embeddings` are **required** fields. The system cannot function without these embeddings.
+- `experience_requirements_embeddings` is optional and may be missing for some jobs. If missing, the system will substitute with zeros during processing.
+- Each embedding vector should be 384-dimensional to match the model configuration.
 
 #### 3. `candidates_text`
 **Purpose**: Stores textual candidate information data for job matching.
