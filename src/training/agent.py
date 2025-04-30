@@ -230,12 +230,13 @@ class DynaQAgent:
         current_q_values = self.q_network(states, actions)
         
         # Compute next Q values
-        next_q_values = torch.zeros(rewards.size(), device=self.device)
-        
-        # This is simplified - in practice, you'd need to evaluate Q for multiple candidate actions
-        # and take the max. For this simplified version, we're assuming the environment provides
-        # a limited set of actions, and the next state has the same action space as the current state.
+        # Ensure target has the same shape as output (batch_size, 1)
         with torch.no_grad():
+            # Convert rewards to have the correct shape (batch_size, 1)
+            if rewards.dim() == 1:
+                rewards = rewards.unsqueeze(1)
+            
+            # Calculate target Q values and ensure they have shape (batch_size, 1)
             next_q_values = rewards + self.gamma * self.target_network(next_states, actions)
         
         # Compute loss
@@ -266,9 +267,13 @@ class DynaQAgent:
         # Move inputs to device
         states = states.to(self.device)
         actions = actions.to(self.device)
+        
+        # Ensure rewards has the correct shape (batch_size, 1)
+        if rewards.dim() == 1:
+            rewards = rewards.unsqueeze(1)
         rewards = rewards.to(self.device)
         
-        # Predict rewards
+        # Predict rewards using the world model
         predicted_rewards = self.world_model(states, actions)
         
         # Compute loss
@@ -407,7 +412,7 @@ class DynaQAgent:
         for _ in range(planning_steps):
             # Sample states and actions from replay buffer for planning
             # For simplicity, we'll use a batch from the buffer
-            states, actions, _, _ = self.replay_buffer.sample(self.batch_size)
+            states, actions, rewards, _ = self.replay_buffer.sample(self.batch_size)
             
             # Predict rewards using world model
             states = states.to(self.device)
@@ -422,6 +427,10 @@ class DynaQAgent:
                 
                 # Use target network to estimate future value
                 next_q_values = self.target_network(next_states, actions)
+                
+                # Ensure rewards have the correct shape (batch_size, 1)
+                if predicted_rewards.dim() == 1:
+                    predicted_rewards = predicted_rewards.unsqueeze(1)
                 
                 # Compute targets using predicted rewards
                 targets = predicted_rewards + self.gamma * next_q_values

@@ -482,8 +482,10 @@ pretraining_metrics = agent.pretrain(
 
 # Plot pretraining metrics
 visualizer.plot_training_metrics(
-    q_losses=pretraining_metrics['q_losses'],
-    world_losses=pretraining_metrics['world_losses'],
+    metrics={
+        'q_losses': pretraining_metrics['q_losses'],
+        'world_losses': pretraining_metrics['world_losses']
+    },
     title="Pretraining Losses"
 )
 
@@ -503,7 +505,6 @@ print("Pretraining completed successfully.")
 # Training parameters from config
 num_episodes = TRAINING_CONFIG["num_episodes"]
 max_steps_per_episode = TRAINING_CONFIG["max_steps_per_episode"]
-update_frequency = TRAINING_CONFIG["update_frequency"]
 
 print("Starting main training loop...")
 
@@ -512,15 +513,16 @@ training_metrics = agent.train(
     env=env,
     num_episodes=num_episodes,
     max_steps_per_episode=max_steps_per_episode,
-    update_frequency=update_frequency,
     applicant_ids=[target_candidate_id]
 )
 
 # Plot training metrics
 visualizer.plot_training_metrics(
-    q_losses=training_metrics['q_losses'],
-    world_losses=training_metrics['world_losses'],
-    rewards=training_metrics['episode_rewards'],
+    metrics={
+        'q_losses': training_metrics['q_losses'],
+        'world_losses': training_metrics['world_losses'],
+        'episode_rewards': training_metrics['episode_rewards']
+    },
     title="Training Metrics"
 )
 
@@ -567,8 +569,8 @@ evaluation_results = {
 
 # Plot evaluation results
 visualizer.plot_evaluation_results(
-    agent_rewards=evaluation_results['agent_rewards'],
     baseline_rewards=evaluation_results['baseline_rewards'],
+    pretrained_rewards=evaluation_results['agent_rewards'],
     title="Evaluation Results"
 )
 
