@@ -4,7 +4,7 @@
 
 `neural_dyna_q_notebook.py` is a Python script formatted as a Jupyter Notebook that implements the Neural Dyna-Q job recommendation system. This script serves as an executable demonstration of the core algorithms developed in the LLM-Planning-Recommendation-System repository, specifically focusing on the neural network-based Dyna-Q reinforcement learning approach to job recommendations.
 
-The file is designed to be run either in Google Colab or locally, with appropriate error handling to manage different execution environments. It contains both code cells and markdown cells (using the `# %%` and `# %% [markdown]` format) which makes it compatible with notebook interfaces like Jupyter, Colab, or VS Code's interactive Python.
+The file is designed to be run either in Google Colab or locally, with appropriate environment setup to manage different execution environments. It contains both code cells and markdown cells (using the `# %%` and `# %% [markdown]` format) which makes it compatible with notebook interfaces like Jupyter, Colab, or VS Code's interactive Python.
 
 ## Purpose and Functionality
 
@@ -26,20 +26,24 @@ The notebook is organized into several logical sections:
 
 1. **Introduction**: Explains the system's purpose and key features
 2. **Setup Environment**: Configures the execution environment (Colab or local)
-3. **Import Project Modules**: Loads required modules with fallback implementations
-4. **Database Connection**: Connects to MongoDB or creates a mock database
+3. **Import Project Modules**: Loads required modules
+4. **Database Connection**: Connects to MongoDB
 5. **Data Loading**: Fetches candidate and job embeddings
 6. **Model Initialization**: Creates neural network models (Q-Network and World Model)
-7. **Environment Setup**: Configures the job recommendation environment
-8. **LLM Integration**: Sets up LLM for feedback-based reward strategies (if applicable)
-9. **Replay Buffer Setup**: Initializes experience replay for reinforcement learning
-10. **Pretraining Phase**: Trains models using supervised learning on generated data
-11. **Online Learning Phase**: Implements the Dyna-Q algorithm for online learning
-12. **Evaluation and Visualization**: Displays performance metrics and visualizations
-13. **Test the Recommendation System**: Generates job recommendations using the trained model
-14. **Conclusion**: Summarizes the implementation and results
+7. **Training**: Implements the Dyna-Q algorithm for learning
+8. **Evaluation**: Tests the trained model against baseline
+9. **Job Recommendations**: Generates personalized job recommendations
+10. **Conclusion**: Summarizes the implementation and results
 
 ## Running the Notebook
+
+### Prerequisites
+
+Before running the notebook, ensure you have the following files in the project's root directory:
+- `db_auth.txt`: Must contain two lines in order to perform Mongo Atlas authentication. The first line must contain nothing but the username. The second line must contain nothing but the password.
+- `hf_primary_token.txt`: Contains Hugging Face authentication token (if using LLM-based strategies)
+
+These files are required after the first cell of the notebook is executed, as they are used for database connection and LLM authentication.
 
 ### In Google Colab
 
@@ -82,16 +86,10 @@ The notebook requires the following main dependencies:
 - Python 3.8+
 - PyTorch
 - NumPy
-- MongoDB (or uses a mock database for demonstration)
+- MongoDB
 - Matplotlib
 - tqdm
-- Transformers (for LLM integration, optional)
-
-The script includes robust error handling to manage missing dependencies:
-- PyTorch installation is attempted if missing
-- Mock implementations of required classes are provided if imports fail
-- A synthetic database is created if MongoDB connection fails
-- LLM-based strategies fall back to cosine similarity if requirements aren't met
+- Transformers (for LLM integration, if using LLM-based strategies)
 
 ## Configuration Options
 
@@ -111,17 +109,6 @@ The file contains Jupyter notebook magic commands (lines starting with `!` or `%
 
 These commands will cause linter errors when viewed as a Python script but are valid when executing in a notebook environment.
 
-## Fault Tolerance
-
-One of the key features of the notebook is its comprehensive error handling:
-
-1. Each major component is wrapped in try-except blocks
-2. Fallback mechanisms are provided for missing dependencies or failed operations
-3. Simulated data is generated if real data is unavailable
-4. Mock implementations of classes are provided if imports fail
-
-This ensures the notebook can run in various environments, providing an educational demonstration even if some components are unavailable.
-
 ## Output and Visualization
 
 The notebook generates the following outputs:
@@ -134,10 +121,10 @@ The notebook generates the following outputs:
 
 If you're extending or modifying this notebook:
 
-1. Maintain the error handling structure to ensure it remains robust
+1. Ensure all required authentication files are present
 2. Test in both Colab and local environments
-3. Keep the fallback implementations updated if you modify the core classes
-4. Consider the Jupyter notebook formatting (`# %%` and `# %% [markdown]`) when editing
+3. Consider the Jupyter notebook formatting (`# %%` and `# %% [markdown]`) when editing
+4. Maintain the precision requirements of the system - the code is designed to fail if it cannot find the correct vectors, paths, or parameters
 
 ## Known Issues
 
