@@ -14,7 +14,7 @@ from typing import Dict, List, Tuple, Optional, Any
 import sys
 import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../../')))
-from config.config import TRAINING_CONFIG
+from config.config import TRAINING_CONFIG, STRATEGY_CONFIG
 
 # Database connection
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../')))
@@ -49,14 +49,8 @@ class JobRecommendationEnv:
         # Database connection
         self.db = db_connector or DatabaseConnector()
         
-        # Set reward scheme
-        self.reward_scheme = reward_scheme or {
-            'APPLY': 1.0,
-            'SAVE': 0.5,
-            'CLICK': 0.0,
-            'VIEW': 0.0,
-            'IGNORE': -0.1
-        }
+        # Set reward scheme from config if not provided
+        self.reward_scheme = reward_scheme or STRATEGY_CONFIG["llm"]["response_mapping"]
         
         # Set reward strategy
         self.reward_strategy = reward_strategy
@@ -164,7 +158,7 @@ class JobRecommendationEnv:
             action_idx: Index of the job action.
             
         Returns:
-            float: Cosine similarity reward [-1, 1] or scaled [0, 1].
+            float: Cosine similarity reward, scaled to [0,1] if configured.
         """
         if action_idx < 0 or action_idx >= len(self.job_vectors):
             raise ValueError(f"Invalid action index: {action_idx}")
@@ -179,10 +173,11 @@ class JobRecommendationEnv:
             dim=1
         ).item()
         
-        # Can optionally scale from [-1, 1] to [0, 1] range
-        # scaled_reward = (cos_sim + 1) / 2
-        
-        return cos_sim
+        # Scale reward based on config
+        if STRATEGY_CONFIG["cosine"]["scale_reward"]:
+            return (cos_sim + 1) / 2  # Scale from [-1,1] to [0,1]
+        else:
+            return cos_sim  # Keep in [-1,1] range
     
     def simulate_user_response(self, job: Dict) -> str:
         """

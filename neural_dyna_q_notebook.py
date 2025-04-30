@@ -250,28 +250,22 @@ except Exception as e:
 # Each network is configured according to the parameters specified in the configuration file.
 
 # %%
-# Extract dimensions and hyperparameters from config
-state_dim = MODEL_CONFIG["q_network"]["state_dim"]
-action_dim = MODEL_CONFIG["q_network"]["action_dim"]
-hidden_dims_q = MODEL_CONFIG["q_network"]["hidden_dims"]
-hidden_dims_world = MODEL_CONFIG["world_model"]["hidden_dims"]
-dropout_rate = MODEL_CONFIG["q_network"]["dropout_rate"]
-
 # Initialize Q-Network for value function approximation
 q_network = QNetwork(
-    state_dim=state_dim,
-    action_dim=action_dim,
-    hidden_dims=hidden_dims_q,
-    dropout=dropout_rate
+    state_dim=MODEL_CONFIG["q_network"]["state_dim"],
+    action_dim=MODEL_CONFIG["q_network"]["action_dim"],
+    hidden_dims=MODEL_CONFIG["q_network"]["hidden_dims"],
+    dropout_rate=MODEL_CONFIG["q_network"]["dropout_rate"],
+    activation=MODEL_CONFIG["q_network"]["activation"]
 ).to(device)
 
 # Initialize target Q-Network (copy of Q-Network)
-# This is used for stable learning by providing a fixed target
 target_q_network = QNetwork(
-    state_dim=state_dim,
-    action_dim=action_dim,
-    hidden_dims=hidden_dims_q,
-    dropout=dropout_rate
+    state_dim=MODEL_CONFIG["q_network"]["state_dim"],
+    action_dim=MODEL_CONFIG["q_network"]["action_dim"],
+    hidden_dims=MODEL_CONFIG["q_network"]["hidden_dims"],
+    dropout_rate=MODEL_CONFIG["q_network"]["dropout_rate"],
+    activation=MODEL_CONFIG["q_network"]["activation"]
 ).to(device)
 
 # Copy parameters from q_network to target_q_network
@@ -280,10 +274,10 @@ target_q_network.eval()  # Set to evaluation mode (no gradient updates)
 
 # Initialize World Model for environment dynamics prediction
 world_model = WorldModel(
-    state_dim=state_dim,
-    action_dim=action_dim,
-    hidden_dims=hidden_dims_world,
-    dropout=dropout_rate
+    input_dim=MODEL_CONFIG["world_model"]["input_dim"],  # Use config value directly
+    hidden_dims=MODEL_CONFIG["world_model"]["hidden_dims"],
+    dropout_rate=MODEL_CONFIG["world_model"]["dropout_rate"],
+    activation=MODEL_CONFIG["world_model"]["activation"]
 ).to(device)
 
 # Initialize optimizers for neural networks
@@ -396,8 +390,8 @@ print(f"Replay buffer initialized with capacity {buffer_capacity}.")
 
 # Initialize the Dyna-Q agent
 agent = DynaQAgent(
-    state_dim=state_dim,
-    action_dim=action_dim,
+    state_dim=MODEL_CONFIG["q_network"]["state_dim"],
+    action_dim=MODEL_CONFIG["q_network"]["action_dim"],
     q_network=q_network,
     target_q_network=target_q_network,
     world_model=world_model,
