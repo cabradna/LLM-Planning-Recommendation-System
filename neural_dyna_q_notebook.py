@@ -230,64 +230,12 @@ except Exception as e:
 # %% [markdown]
 # ## 5. Data Loading
 # 
-# We'll define utility functions to:
+# We'll now access the database to:
 # 1. Retrieve candidate (applicant) embedding data
 # 2. Sample a subset of jobs from the database
 # 3. Retrieve job embedding vectors
 # 
-# These functions will help us efficiently access the data needed for training and evaluation.
-
-# %%
-# Function to get candidate embeddings from the database
-def get_applicant_state(applicant_id):
-    """
-    Retrieve the embedding vector representing an applicant's state.
-    
-    Args:
-        applicant_id: Unique identifier for the candidate
-        
-    Returns:
-        torch.Tensor: State vector representing the candidate's skills and attributes
-    """
-    return db.get_applicant_state(applicant_id)
-
-# Function to sample candidate jobs from the database
-def sample_candidate_jobs(n=TRAINING_CONFIG["num_jobs"], filter_criteria=None, validate_embeddings=False):
-    """
-    Sample a subset of jobs to be considered for recommendation.
-    
-    Args:
-        n: Number of jobs to sample
-        filter_criteria: Optional dictionary for filtering jobs
-        validate_embeddings: Boolean indicating whether to validate job embeddings
-        
-    Returns:
-        List[Dict]: List of job documents
-    """
-    return db.sample_candidate_jobs(n, filter_criteria, validate_embeddings)
-
-# Function to get job embedding vectors
-def get_job_vectors(job_ids):
-    """
-    Retrieve embedding vectors for a list of job IDs.
-    
-    Args:
-        job_ids: List of job identifiers
-        
-    Returns:
-        List[torch.Tensor]: List of job embedding vectors
-    """
-    return db.get_job_vectors(job_ids)
-
-# %% [markdown]
-# ## 6. Select a Target Candidate and Fetch Jobs
-# 
-# Now we'll:
-# 1. Query the database to get a list of candidate IDs
-# 2. Select a target candidate for personalized training
-# 3. Retrieve the candidate's embedding vector
-# 4. Sample jobs from the database
-# 5. Retrieve embedding vectors for the sampled jobs
+# These operations use the DatabaseConnector methods to efficiently access the data needed for training and evaluation.
 
 # %%
 # Query the database to get a list of candidate IDs
@@ -305,17 +253,17 @@ try:
     target_candidate_id = candidate_ids[0]
     print(f"Selected target candidate ID: {target_candidate_id}")
     
-    # Get the candidate embedding
-    candidate_embedding = get_applicant_state(target_candidate_id)
+    # Get the candidate embedding directly from the database connector
+    candidate_embedding = db.get_applicant_state(target_candidate_id)
     print(f"Candidate embedding shape: {candidate_embedding.shape}")
     
     # Sample jobs from the database with embedding validation to ensure all have required fields
-    sampled_jobs = sample_candidate_jobs(n=TRAINING_CONFIG["num_jobs"], validate_embeddings=True)
+    sampled_jobs = db.sample_candidate_jobs(n=TRAINING_CONFIG["num_jobs"], validate_embeddings=True)
     job_ids = [job["_id"] for job in sampled_jobs]
     print(f"Sampled {len(job_ids)} jobs from the database (all with valid embeddings)")
     
-    # Get job vectors for the sampled jobs
-    job_vectors = get_job_vectors(job_ids)
+    # Get job vectors for the sampled jobs directly from the database connector
+    job_vectors = db.get_job_vectors(job_ids)
     print(f"Fetched {len(job_vectors)} job vectors")
     
     # Convert job vectors to NumPy array for easier handling
@@ -327,7 +275,7 @@ except Exception as e:
     raise
 
 # %% [markdown]
-# ## 7. Model Initialization
+# ## 6. Model Initialization
 # 
 # We'll initialize the neural networks used in the Dyna-Q algorithm:
 # 
@@ -389,7 +337,7 @@ if not hasattr(env, 'current_state'):
 print(f"Environment initialized with {reward_strategy} reward strategy.")
 
 # %% [markdown]
-# ## 8. LLM Integration (If Using LLM-Based Reward Strategy)
+# ## 7. LLM Integration (If Using LLM-Based Reward Strategy)
 # 
 # If we're using an LLM-based reward strategy (either "llm" or "hybrid"), we need to set up a language model to simulate candidate responses to job recommendations. This helps in generating more realistic rewards based on semantic understanding of both candidate profiles and job descriptions.
 # 
@@ -451,7 +399,7 @@ if STRATEGY_CONFIG["llm"]["enabled"] and IN_COLAB:
         env.reward_strategy = "cosine"
 
 # %% [markdown]
-# ## 10. Training Setup
+# ## 8. Training Setup
 # 
 # We'll now set up the training process using the DynaQAgent's built-in training interface.
 # The agent handles:
@@ -475,7 +423,7 @@ agent = DynaQAgent(
 print("Dyna-Q agent initialized successfully.")
 
 # %% [markdown]
-# ## 11. Pretraining Phase
+# ## 9. Pretraining Phase
 # 
 # In the pretraining phase, we'll use the agent's built-in pretraining method to:
 # 1. Generate initial experiences
@@ -542,7 +490,7 @@ visualizer.plot_training_metrics(
 print("Pretraining completed successfully.")
 
 # %% [markdown]
-# ## 12. Main Training Loop
+# ## 10. Main Training Loop
 # 
 # Now we'll run the main training loop using the agent's training interface.
 # The agent will:
@@ -579,7 +527,7 @@ visualizer.plot_training_metrics(
 print("Training completed successfully.")
 
 # %% [markdown]
-# ## 13. Evaluation
+# ## 11. Evaluation
 # 
 # Finally, we'll evaluate the trained agent using the Evaluator class.
 # This will:
@@ -627,7 +575,7 @@ visualizer.plot_evaluation_results(
 print("Evaluation completed successfully.")
 
 # %% [markdown]
-# ## 14. Generate Job Recommendations
+# ## 12. Generate Job Recommendations
 # 
 # Now let's use our trained agent to generate personalized job recommendations for our target candidate. We'll:
 # 
@@ -702,25 +650,25 @@ for i, (job_id, score) in enumerate(zip(recommended_jobs, recommendation_scores)
     print("-" * 50)
 
 # %% [markdown]
-# ## 15. Conclusion and Next Steps
+# ## 13. Conclusion and Next Steps
 # 
 # In this notebook, we've implemented and demonstrated a Neural Dyna-Q job recommendation system. This approach combines the strengths of deep reinforcement learning with model-based planning to provide personalized job recommendations.
 # 
-# ### 15.1 Key Accomplishments
+# ### 13.1 Key Accomplishments
 # 
 # 1. **Data Integration**: Connected to the MongoDB database to retrieve real candidate and job data
 # 2. **Neural Networks**: Implemented deep Q-network and world model for value function and dynamics prediction
 # 3. **Dyna-Q Algorithm**: Combined direct RL with model-based planning for efficient learning
 # 4. **Personalized Recommendations**: Generated job recommendations tailored to a specific candidate
 # 
-# ### 15.2 Potential Improvements
+# ### 13.2 Potential Improvements
 # 
 # 1. **Extended Training**: Train for more episodes to improve recommendation quality
 # 2. **Hyperparameter Tuning**: Optimize learning rates, network architectures, and other parameters
 # 3. **Advanced Reward Functions**: Implement more sophisticated reward strategies using LLMs
 # 4. **User Feedback**: Incorporate real user feedback to improve recommendations
 # 
-# ### 15.3 Applications
+# ### 13.3 Applications
 # 
 # This system could be deployed as:
 # - A personalized job recommendation service for job seekers

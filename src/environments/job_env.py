@@ -89,7 +89,7 @@ class JobRecommendationEnv:
         self.current_state = self.db.get_applicant_state(applicant_id)
         
         # Sample candidate jobs for this episode
-        self.candidate_jobs = self.db.sample_candidate_jobs(n=100)  # Adjust sample size as needed
+        self.candidate_jobs = self.db.sample_candidate_jobs(n=100, validate_embeddings=True)  # Adjust sample size as needed
         
         # Extract job IDs
         job_ids = [job["_id"] for job in self.candidate_jobs]
