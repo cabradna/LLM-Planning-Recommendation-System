@@ -248,33 +248,25 @@ class Visualizer:
     
     def plot_learning_curves(self, data_dict: Dict[str, Dict[str, List[float]]],
                               metric: str = "episode_rewards",
-                              title: str = "Learning Curves",
                               filename: str = "learning_curves.png") -> None:
         """
-        Plot learning curves for different configurations.
+        Plot learning curves for different agents or configurations.
         
         Args:
-            data_dict: Nested dictionary mapping config names to metric dictionaries.
-            metric: Name of the metric to plot.
-            title: Plot title.
+            data_dict: Dictionary mapping names to metrics dictionaries.
+            metric: Metric to plot.
             filename: Filename to save the plot.
         """
         # Create figure
         plt.figure(figsize=(10, 6))
         
-        # Plot learning curve for each configuration
-        for config_name, metrics in data_dict.items():
+        # Plot learning curves for each agent/configuration
+        for name, metrics in data_dict.items():
             if metric in metrics:
-                values = metrics[metric]
-                plt.plot(values, linewidth=2, label=config_name)
-                
-                # Add smoothed line
-                if len(values) > 10:
-                    smoothed = np.convolve(values, np.ones(10)/10, mode='valid')
-                    plt.plot(range(9, len(values)), smoothed, '--', linewidth=1)
+                plt.plot(metrics[metric], linewidth=2, label=name)
         
         # Add annotations
-        plt.title(title, fontsize=14)
+        plt.title(f"Learning Curves: {metric.replace('_', ' ').title()}", fontsize=14)
         plt.xlabel("Episodes", fontsize=12)
         plt.ylabel(metric.replace('_', ' ').title(), fontsize=12)
         plt.grid(True, alpha=0.3)
@@ -284,4 +276,79 @@ class Visualizer:
         plt.savefig(os.path.join(self.results_dir, filename), dpi=300, bbox_inches='tight')
         plt.close()
         
-        logger.info(f"Saved learning curves plot to {filename}") 
+        logger.info(f"Saved learning curves plot to {filename}")
+    
+    def plot_metric_with_variance(self, metric_data: List[List[float]], 
+                                   title: str = "Performance Across Experiments",
+                                   ylabel: str = "Metric Value",
+                                   filename: str = "metric_with_variance.png") -> None:
+        """
+        Plot a metric with variance across multiple experiments.
+        
+        Args:
+            metric_data: List of metric data arrays from different experiments
+            title: Plot title
+            ylabel: Y-axis label
+            filename: Filename to save the plot
+        """
+        plt.figure(figsize=(10, 6))
+        
+        # Find minimum length (in case experiments have different lengths)
+        min_length = min(len(data) for data in metric_data)
+        
+        # Truncate all arrays to the minimum length
+        truncated_data = [data[:min_length] for data in metric_data]
+        
+        # Convert to numpy for easier calculations
+        data_array = np.array(truncated_data)
+        
+        # Calculate mean and standard deviation across experiments
+        mean = np.mean(data_array, axis=0)
+        std = np.std(data_array, axis=0)
+        
+        # Create x-axis (episodes)
+        episodes = np.arange(1, min_length + 1)
+        
+        # Plot mean line
+        plt.plot(episodes, mean, label='Mean')
+        
+        # Plot standard deviation area
+        plt.fill_between(episodes, mean - std, mean + std, alpha=0.3, label='±1 std')
+        
+        plt.title(title)
+        plt.xlabel("Episode")
+        plt.ylabel(ylabel)
+        plt.legend()
+        plt.grid(True)
+        
+        # Save the plot
+        plt.savefig(os.path.join(self.results_dir, filename))
+        plt.close()
+        
+        logger.info(f"Saved metric with variance plot to {filename}")
+    
+    def plot_experiment_results(self, experiment_results: Dict[str, List[List[float]]],
+                                 title_prefix: str = "Performance",
+                                 filename_prefix: str = "experiment") -> None:
+        """
+        Plot various metrics from multiple experiments with variance.
+        
+        Args:
+            experiment_results: Dictionary with metrics as keys and lists of experiment data as values
+            title_prefix: Prefix for plot titles
+            filename_prefix: Prefix for filenames
+        """
+        # Plot each metric
+        for metric_name, exp_data in experiment_results.items():
+            if not exp_data:
+                continue
+                
+            # Create descriptive names
+            title = f"{title_prefix}: {metric_name.replace('_', ' ').title()}"
+            ylabel = f"{metric_name.replace('_', ' ').title()}"
+            filename = f"{filename_prefix}_{metric_name}.png"
+            
+            # Plot this metric
+            self.plot_metric_with_variance(exp_data, title, ylabel, filename)
+            
+        logger.info(f"Plotted results for {len(experiment_results)} metrics across experiments") 

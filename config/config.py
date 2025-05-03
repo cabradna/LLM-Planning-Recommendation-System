@@ -65,7 +65,7 @@ TRAINING_CONFIG = {
     "min_replay_buffer_size": 1000,  # Minimum buffer size before training starts
 
     # Training process
-    "num_episodes": 5000,  # Number of episodes
+    "num_episodes": 100,  # Number of episodes
     "max_steps_per_episode": 100,  # Maximum steps per episode
     "eval_frequency": 100,  # Evaluation frequency (episodes)
     "save_frequency": 1000,  # Model saving frequency (episodes)

@@ -478,7 +478,7 @@ class DynaQAgent:
         if self.training_strategy == "hybrid" and isinstance(env, HybridEnv):
             env.set_cosine_weight(self.cosine_weight)
         
-        # Training loop
+        # Training loop - not using tqdm here to avoid nested progress bars which would clutter the output
         for step in range(max_steps):
             # Get available actions
             valid_action_indices = env.get_valid_actions()
@@ -589,40 +589,61 @@ class DynaQAgent:
         self.target_applicant_id = target_applicant_id
         
         # Training loop - all episodes use the same applicant
-        for episode in range(num_episodes):
-            # Handle strategy switching for hybrid approach
-            if self.training_strategy == "hybrid" and switch_to_llm_episode is not None:
-                if episode == switch_to_llm_episode:
-                    logger.info(f"Episode {episode}: Switching from cosine similarity to LLM feedback")
-                    # Override cosine weight to use only LLM feedback
-                    self.cosine_weight = 0.0
-                    if isinstance(env, HybridEnv):
-                        env.set_cosine_weight(0.0)
-            
-            # Train for one episode using the target applicant
-            episode_metrics = self.train_step(env, target_applicant_id, max_steps_per_episode)
-            
-            # Update history
-            for key, value in episode_metrics.items():
-                if key in history:
-                    history[key].append(value)
-            
-            # Log progress
-            logger.info(f"Episode {episode}: Reward={episode_metrics['episode_reward']:.4f}, "
-                       f"Q-Loss={episode_metrics['q_network_loss']:.4f}, "
-                       f"World-Loss={episode_metrics['world_model_loss']:.4f}")
-            
-            # Evaluate periodically
-            if eval_frequency > 0 and episode % eval_frequency == 0:
-                # Evaluate using the same target applicant
-                eval_reward = self.evaluate(env, 5, max_steps_per_episode, [target_applicant_id])
-                history['eval_reward'].append(eval_reward)
-                logger.info(f"Evaluation at episode {episode}: Avg Reward={eval_reward:.4f}")
-            
-            # Save models periodically
-            if model_dir and save_frequency > 0 and episode > 0 and episode % save_frequency == 0:
-                self.save_models(model_dir, episode)
-                logger.info(f"Saved models at episode {episode}")
+        try:
+            from tqdm.notebook import tqdm  # Try to use notebook version first for better rendering
+        except ImportError:
+            from tqdm import tqdm  # Fall back to standard tqdm if notebook version not available
+        
+        with tqdm(total=num_episodes, desc="Training Dyna-Q Agent") as pbar:
+            for episode in range(num_episodes):
+                # Handle strategy switching for hybrid approach
+                if self.training_strategy == "hybrid" and switch_to_llm_episode is not None:
+                    if episode == switch_to_llm_episode:
+                        logger.info(f"Episode {episode}: Switching from cosine similarity to LLM feedback")
+                        # Override cosine weight to use only LLM feedback
+                        self.cosine_weight = 0.0
+                        if isinstance(env, HybridEnv):
+                            env.set_cosine_weight(0.0)
+                
+                # Train for one episode using the target applicant
+                episode_metrics = self.train_step(env, target_applicant_id, max_steps_per_episode)
+                
+                # Update history
+                for key, value in episode_metrics.items():
+                    if key in history:
+                        history[key].append(value)
+                
+                # Update tqdm progress bar with metrics
+                pbar.set_postfix({
+                    'reward': f"{episode_metrics['episode_reward']:.3f}",
+                    'q_loss': f"{episode_metrics['q_network_loss']:.3f}",
+                    'world_loss': f"{episode_metrics['world_model_loss']:.3f}"
+                })
+                pbar.update(1)
+                
+                # Log progress
+                logger.info(f"Episode {episode}: Reward={episode_metrics['episode_reward']:.4f}, "
+                           f"Q-Loss={episode_metrics['q_network_loss']:.4f}, "
+                           f"World-Loss={episode_metrics['world_model_loss']:.4f}")
+                
+                # Evaluate periodically
+                if eval_frequency > 0 and episode % eval_frequency == 0:
+                    # Evaluate using the same target applicant
+                    eval_reward = self.evaluate(env, 5, max_steps_per_episode, [target_applicant_id])
+                    history['eval_reward'].append(eval_reward)
+                    logger.info(f"Evaluation at episode {episode}: Avg Reward={eval_reward:.4f}")
+                    # Update tqdm with evaluation metric
+                    pbar.set_postfix({
+                        'reward': f"{episode_metrics['episode_reward']:.3f}",
+                        'q_loss': f"{episode_metrics['q_network_loss']:.3f}",
+                        'world_loss': f"{episode_metrics['world_model_loss']:.3f}",
+                        'eval_reward': f"{eval_reward:.3f}"
+                    })
+                
+                # Save models periodically
+                if model_dir and save_frequency > 0 and episode > 0 and episode % save_frequency == 0:
+                    self.save_models(model_dir, episode)
+                    logger.info(f"Saved models at episode {episode}")
         
         # Final evaluation
         final_eval_reward = self.evaluate(env, 10, max_steps_per_episode, [target_applicant_id])

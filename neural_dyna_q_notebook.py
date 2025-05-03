@@ -508,25 +508,151 @@ max_steps_per_episode = TRAINING_CONFIG["max_steps_per_episode"]
 
 print("Starting main training loop...")
 
-# Run training using agent's interface
-training_metrics = agent.train(
-    env=env,
-    num_episodes=num_episodes,
-    max_steps_per_episode=max_steps_per_episode,
-    applicant_ids=[target_candidate_id]
+# Set up for multiple experiments
+num_experiments = 5  # Number of experiments to run
+experiment_results = {
+    'q_network_loss': [],
+    'world_model_loss': [],
+    'episode_reward': [],
+    'eval_reward': []
+}
+
+# Create directory for saving results
+results_dir = os.path.join(PATH_CONFIG["results_dir"], "multi_experiment")
+os.makedirs(results_dir, exist_ok=True)
+
+# Run multiple experiments
+for exp_idx in range(num_experiments):
+    print(f"\nStarting experiment {exp_idx+1}/{num_experiments}")
+    
+    # Reinitialize agent for each experiment to ensure independence
+    if exp_idx > 0:
+        q_network = QNetwork(
+            state_dim=MODEL_CONFIG["q_network"]["state_dim"],
+            action_dim=MODEL_CONFIG["q_network"]["action_dim"],
+            hidden_dims=MODEL_CONFIG["q_network"]["hidden_dims"],
+            dropout_rate=MODEL_CONFIG["q_network"]["dropout_rate"],
+            activation=MODEL_CONFIG["q_network"]["activation"]
+        ).to(device)
+
+        world_model = WorldModel(
+            input_dim=MODEL_CONFIG["world_model"]["input_dim"],
+            hidden_dims=MODEL_CONFIG["world_model"]["hidden_dims"],
+            dropout_rate=MODEL_CONFIG["world_model"]["dropout_rate"],
+            activation=MODEL_CONFIG["world_model"]["activation"]
+        ).to(device)
+        
+        agent = DynaQAgent(
+            state_dim=MODEL_CONFIG["q_network"]["state_dim"],
+            action_dim=MODEL_CONFIG["q_network"]["action_dim"],
+            q_network=q_network,
+            world_model=world_model,
+            training_strategy=reward_strategy,
+            device=device,
+            target_applicant_id=target_candidate_id
+        )
+    
+    # Run training for this experiment
+    training_metrics = agent.train(
+        env=env,
+        num_episodes=num_episodes,
+        max_steps_per_episode=max_steps_per_episode,
+        applicant_ids=[target_candidate_id]
+    )
+    
+    # Store results for this experiment
+    for key in experiment_results:
+        if key in training_metrics:
+            experiment_results[key].append(training_metrics[key])
+    
+    # Save individual experiment results
+    exp_file = os.path.join(results_dir, f"experiment_{exp_idx+1}.pt")
+    torch.save(training_metrics, exp_file)
+    print(f"Saved experiment {exp_idx+1} results to {exp_file}")
+
+# Save aggregated results
+aggregated_file = os.path.join(results_dir, "aggregated_results.pt")
+torch.save(experiment_results, aggregated_file)
+print(f"Saved aggregated results to {aggregated_file}")
+
+# Visualize results using the Visualizer
+visualizer.plot_experiment_results(
+    experiment_results=experiment_results,
+    title_prefix="Dyna-Q Performance",
+    filename_prefix="multi_experiment"
 )
 
-# Plot training metrics
+# Plot training metrics for the last experiment
 visualizer.plot_training_metrics(
     metrics={
-        'q_losses': training_metrics['q_losses'],
-        'world_losses': training_metrics['world_losses'],
-        'episode_rewards': training_metrics['episode_rewards']
+        'q_losses': training_metrics['q_network_loss'],
+        'world_losses': training_metrics['world_model_loss'],
+        'episode_rewards': training_metrics['episode_reward']
     },
-    title="Training Metrics"
+    title="Training Metrics (Last Experiment)"
 )
 
-print("Training completed successfully.")
+print("Multiple experiments completed successfully.")
+
+# %% [markdown]
+# ## 10.1 Loading and Visualizing Saved Experiment Results
+# 
+# This section provides functionality to load and analyze results from previously run experiments.
+# This is useful for revisiting experiment results without having to rerun the experiments.
+
+# %%
+def load_experiment_results(results_dir):
+    """
+    Load saved experiment results for visualization.
+    
+    Args:
+        results_dir: Directory containing experiment results
+    
+    Returns:
+        dict: Loaded experiment results
+    """
+    # Check if aggregated results exist
+    aggregated_file = os.path.join(results_dir, "aggregated_results.pt")
+    
+    if os.path.exists(aggregated_file):
+        print(f"Loading aggregated results from {aggregated_file}")
+        return torch.load(aggregated_file)
+    else:
+        # Try to load individual experiment files
+        import glob
+        exp_files = glob.glob(os.path.join(results_dir, "experiment_*.pt"))
+        
+        if not exp_files:
+            print(f"No experiment files found in {results_dir}")
+            return {}
+        
+        print(f"Found {len(exp_files)} individual experiment files")
+        
+        # Load individual files and combine them
+        combined_results = {
+            'q_network_loss': [],
+            'world_model_loss': [],
+            'episode_reward': [],
+            'eval_reward': []
+        }
+        
+        for file in exp_files:
+            exp_data = torch.load(file)
+            for key in combined_results:
+                if key in exp_data:
+                    combined_results[key].append(exp_data[key])
+        
+        return combined_results
+
+# Example usage (commented out by default)
+# results_dir = os.path.join(PATH_CONFIG["results_dir"], "multi_experiment")
+# loaded_results = load_experiment_results(results_dir)
+# if loaded_results:
+#     visualizer.plot_experiment_results(
+#         experiment_results=loaded_results,
+#         title_prefix="Loaded Results",
+#         filename_prefix="loaded_experiment"
+#     )
 
 # %% [markdown]
 # ## 11. Evaluation
