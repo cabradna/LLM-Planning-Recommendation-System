@@ -67,7 +67,7 @@ TRAINING_CONFIG = {
     # Training process
     "num_episodes": 100,  # Number of episodes
     "max_steps_per_episode": 100,  # Maximum steps per episode
-    "eval_frequency": 100,  # Evaluation frequency (episodes)
+    "eval_frequency": 10,  # Evaluation frequency (episodes)
     "save_frequency": 1000,  # Model saving frequency (episodes)
 
     # Data parameters
@@ -76,7 +76,7 @@ TRAINING_CONFIG = {
 
     # Pretraining parameters
     "pretraining": {
-        "num_samples": 1000,  # Number of samples for pretraining
+        "num_samples": 10000,  # Number of samples for pretraining
         "num_epochs": 20,  # Number of pretraining epochs
     },
 
