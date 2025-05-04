@@ -468,7 +468,8 @@ class TensorCache:
         """Return cache statistics."""
         return {
             "job_count": len(self.job_text_ids),
-            "applicant_count": len(self.applicant_states),
+            "applicant_state_count": len(self.applicant_states),
+            "applicant_profile_count": len(self.applicant_profiles_text),
             "hits": self.cache_hits,
             "misses": self.cache_misses,
             "hit_rate": self.cache_hits / (self.cache_hits + self.cache_misses) if (self.cache_hits + self.cache_misses) > 0 else 0,
