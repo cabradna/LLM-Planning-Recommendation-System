@@ -579,16 +579,18 @@ print(f"Starting pretraining with {reward_strategy} strategy...")
 pretraining_data = []
 state = env.reset(applicant_id=target_candidate_id)
 
-# Get valid job indices from tensor cache
-valid_job_indices = tensor_cache.get_valid_job_indices()
+# Get valid job indices - since get_valid_job_indices() doesn't exist, use job_ids directly
+valid_job_indices = list(range(len(tensor_cache.job_ids)))
 num_pretraining_samples = min(TRAINING_CONFIG["pretraining"]["num_samples"], len(valid_job_indices))
 print(f"Using {len(valid_job_indices)} valid jobs from tensor cache for pretraining")
 
 for i in tqdm(range(num_pretraining_samples), desc="Generating pretraining data"):
-    job_idx = valid_job_indices[i % len(valid_job_indices)]
+    # Get index from valid_job_indices
+    idx = i % len(valid_job_indices)
+    job_idx = valid_job_indices[idx]
     
     # Get job vector from tensor cache
-    job_vector = tensor_cache.get_job_vector(job_idx).cpu().numpy()
+    job_vector = tensor_cache.job_vectors[job_idx].cpu().numpy()
     
     next_state, reward, done, _ = env.step(job_idx)
     pretraining_data.append((state, job_vector, reward, next_state))
@@ -866,8 +868,8 @@ test_epsilon = 0.0  # No exploration during testing (pure exploitation)
 recommended_jobs = []
 recommendation_scores = []
 
-# Get all valid job indices from tensor cache
-valid_job_indices = tensor_cache.get_valid_job_indices()
+# Get all valid job indices
+valid_job_indices = list(range(len(tensor_cache.job_ids)))
 print(f"Found {len(valid_job_indices)} valid jobs in tensor cache for recommendations")
 
 # Reset the environment to get the initial state
@@ -879,19 +881,19 @@ remaining_job_indices = valid_job_indices.copy()
 # Generate top-K recommendations
 for _ in range(min(num_recommendations, len(valid_job_indices))):
     # Get job tensors for remaining indices
-    action_tensors = [tensor_cache.get_job_vector(idx) for idx in remaining_job_indices]
+    action_tensors = [tensor_cache.job_vectors[idx] for idx in remaining_job_indices]
     
     # Select best job according to Q-network
     action_idx, _ = agent.select_action(state, action_tensors, eval_mode=True)
     
     # Get the corresponding job_id
     selected_idx = remaining_job_indices[action_idx]
-    job_id = tensor_cache.get_job_id(selected_idx)
+    job_id = tensor_cache.job_ids[selected_idx]
     
     # Calculate Q-value for logging
     with torch.no_grad():
         state_tensor = torch.tensor(state, device=device).unsqueeze(0)
-        job_tensor = tensor_cache.get_job_vector(selected_idx).unsqueeze(0)
+        job_tensor = tensor_cache.job_vectors[selected_idx].unsqueeze(0)
         q_value = agent.q_network(state_tensor, job_tensor).item()
     
     recommended_jobs.append(job_id)

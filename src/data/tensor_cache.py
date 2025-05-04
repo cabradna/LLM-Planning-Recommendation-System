@@ -331,6 +331,84 @@ class TensorCache:
             self.cache_misses += 1
             raise KeyError(f"Job {job_id} not found in cache")
     
+    def get_valid_job_indices(self):
+        """
+        Get a list of valid job indices that can be used for lookup in the cache.
+        
+        Returns:
+            List[int]: List of valid job indices
+        """
+        if not self.initialized:
+            raise RuntimeError("Cache not initialized, call copy_from_database first")
+        
+        return list(range(len(self.job_ids)))
+    
+    def get_job_id(self, index):
+        """
+        Get job ID for a specific index.
+        
+        Args:
+            index: Index of the job in the cache
+            
+        Returns:
+            str: Job ID
+            
+        Raises:
+            IndexError: If index is out of range
+        """
+        if not self.initialized:
+            raise RuntimeError("Cache not initialized, call copy_from_database first")
+        
+        if index < 0 or index >= len(self.job_ids):
+            raise IndexError(f"Job index {index} out of range (0-{len(self.job_ids)-1})")
+        
+        return self.job_ids[index]
+    
+    def get_job_vector_by_index(self, index):
+        """
+        Get job vector for a specific index in the cache.
+        
+        Args:
+            index: Index of the job in the cache
+            
+        Returns:
+            torch.Tensor: Job vector
+            
+        Raises:
+            IndexError: If index is out of range
+        """
+        if not self.initialized:
+            raise RuntimeError("Cache not initialized, call copy_from_database first")
+        
+        if index < 0 or index >= len(self.job_ids):
+            raise IndexError(f"Job index {index} out of range (0-{len(self.job_ids)-1})")
+        
+        self.cache_hits += 1
+        return self.job_vectors[index]
+    
+    def clear(self):
+        """
+        Clear all cached data to free memory.
+        """
+        logger.info("Clearing tensor cache...")
+        
+        # Clear applicant data
+        self.applicant_states = {}
+        
+        # Clear job data
+        if self.job_vectors is not None:
+            self.job_vectors = None
+        
+        self.job_ids = []
+        self.job_metadata = {}
+        
+        # Reset stats
+        self.initialized = False
+        
+        logger.info("Tensor cache cleared successfully")
+        
+        return self
+    
     def __len__(self):
         """Return the number of cached jobs."""
         return len(self.job_ids)
