@@ -49,6 +49,7 @@ class DynaQAgent:
                  training_strategy: str = "cosine",
                  device: Optional[torch.device] = None,
                  target_applicant_id: Optional[str] = None,
+                 tensor_cache = None,
                  **kwargs):
         """
         Initialize the Dyna-Q agent.
@@ -62,10 +63,15 @@ class DynaQAgent:
             training_strategy: Strategy for training ("cosine", "llm", or "hybrid").
             device: Device to run the models on.
             target_applicant_id: ID of the applicant this agent is specialized for.
+            tensor_cache: Initialized TensorCache instance. Required for cache-based operations.
             **kwargs: Additional parameters to override config values.
         """
         # Set device
         self.device = device or TRAINING_CONFIG["device"]
+        
+        self.tensor_cache = tensor_cache
+        if self.tensor_cache is None:
+            logger.warning("TensorCache not provided to DynaQAgent constructor. Some operations might fail.")
         
         # Set training strategy
         self.training_strategy = training_strategy
@@ -904,7 +910,8 @@ class DynaQAgent:
             device=device,
             gamma=config.get("gamma", TRAINING_CONFIG["gamma"]),
             epsilon=config.get("epsilon", TRAINING_CONFIG["epsilon_end"]),
-            target_applicant_id=config.get("target_applicant_id", None)
+            target_applicant_id=config.get("target_applicant_id", None),
+            tensor_cache=config.get("tensor_cache", None)
         )
         
         # Set additional parameters

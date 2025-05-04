@@ -246,14 +246,17 @@ except Exception as e:
     raise
 
 # %% [markdown]
-# ## 5. Data Loading and Tensor Cache Initialization
-# 
-# We'll now:
-# 1. Select a target candidate for training
-# 2. Initialize the tensor cache with the target candidate
-# 3. Create the environment with the cache
+# ## 5. Data Loading, Cache Init, Agent/Env Init, and First Reset
+#
+# This combined cell handles:
+# 1. Selecting the target candidate ID
+# 2. Initializing the TensorCache and loading data from DB
+# 3. Initializing the appropriate Environment using the cache
+# 4. Initializing the QNetwork, WorldModel, and DynaQAgent using the cache
+# 5. Initializing Visualizer and Evaluator
+# 6. Performing the first environment reset for the target candidate
 
-# %%
+# %% 
 # Get target candidate ID
 try:
     collection = db_connector.db[db_connector.collections["candidates_text"]]
@@ -266,33 +269,33 @@ except Exception as e:
 
 # Initialize tensor cache
 CACHE_CONFIG = {
-    "enabled": True,                                    # Whether to use tensor cache
-    "device": TRAINING_CONFIG.get("device", "cuda"),    # Device to store tensors on
-    "load_all_jobs": True                               # Whether to load all valid jobs
+    "enabled": True,
+    "device": TRAINING_CONFIG.get("device", "cuda"),
+    "load_all_jobs": True
 }
+
+tensor_cache = None # Define outside the if block for broader scope if needed later
+env = None
+agent = None
 
 if CACHE_CONFIG["enabled"]:
     print(f"Initializing tensor cache on {CACHE_CONFIG['device']}...")
-    
-    # Create tensor cache
     tensor_cache = TensorCache(device=CACHE_CONFIG["device"])
-    
-    # Load all data from database to cache
     tensor_cache.copy_from_database(
         db_connector=db_connector,
         applicant_ids=[target_candidate_id]
     )
-    
-    # Print cache statistics
     stats = tensor_cache.cache_stats()
-    print(f"Cache initialized with {stats['job_count']} jobs")
+    # Use the specific counts from stats
+    print(f"Cache initialized with {stats['job_count']} jobs and {stats['applicant_state_count']} applicant states.") 
     print(f"Initialization time: {stats['initialization_time']:.2f} seconds")
     print(f"Memory device: {stats['device']}")
-    
+
     # Create environment with cache (NO db_connector)
     if reward_strategy == "cosine":
         env = JobRecommendationEnv(
             tensor_cache=tensor_cache,
+            reward_scheme=STRATEGY_CONFIG["llm"]["response_mapping"], # Keep scheme for potential hybrid switch
             reward_strategy="cosine",
             random_seed=ENV_CONFIG["random_seed"]
         )
@@ -311,14 +314,12 @@ if CACHE_CONFIG["enabled"]:
         )
     else:
         raise ValueError(f"Unknown reward strategy: {reward_strategy}")
-    
-    print(f"Created {reward_strategy} environment with tensor cache")
+    print(f"Created {reward_strategy} environment instance.")
+
 else:
-    # Environment requires cache now, so this path should error or not be taken
     raise RuntimeError("TensorCache is disabled in CACHE_CONFIG, but the environment now requires it.")
 
-# %%
-# Initialize Q-network
+# Initialize Models
 q_network = QNetwork(
     state_dim=MODEL_CONFIG["q_network"]["state_dim"],
     action_dim=MODEL_CONFIG["q_network"]["action_dim"],
@@ -327,40 +328,54 @@ q_network = QNetwork(
     activation=MODEL_CONFIG["q_network"]["activation"]
 ).to(device)
 
-# Initialize World Model
 world_model = WorldModel(
     input_dim=MODEL_CONFIG["world_model"]["input_dim"],
     hidden_dims=MODEL_CONFIG["world_model"]["hidden_dims"],
     dropout_rate=MODEL_CONFIG["world_model"]["dropout_rate"],
     activation=MODEL_CONFIG["world_model"]["activation"]
 ).to(device)
+print("Initialized QNetwork and WorldModel.")
 
-# Initialize DynaQAgent (pass tensor_cache, no db_connector mentioned)
+# Initialize DynaQAgent
 agent = DynaQAgent(
     state_dim=MODEL_CONFIG["q_network"]["state_dim"],
     action_dim=MODEL_CONFIG["q_network"]["action_dim"],
     q_network=q_network,
+    target_network=None, # Allow init to create target network
     world_model=world_model,
     training_strategy=reward_strategy,
     device=device,
     target_applicant_id=target_candidate_id,
-    tensor_cache=tensor_cache # Pass the initialized cache
+    tensor_cache=tensor_cache # Pass the populated cache
 )
+print(f"Initialized DynaQAgent for applicant {target_candidate_id}.")
 
-# Initialize Visualizer
+# Initialize Visualizer & Evaluator
 visualizer = Visualizer()
-
-# Initialize Evaluator
 evaluator = Evaluator()
+print("Initialized Visualizer and Evaluator.")
 
-# Set the target candidate ID for the environment
-env.reset(applicant_id=target_candidate_id)
-
-# Verify environment initialization
-if not hasattr(env, 'current_state'):
-    raise ValueError("Environment initialization failed - missing current_state")
-
-print(f"Environment initialized with {reward_strategy} reward strategy.")
+# Reset environment and verify
+try:
+    print(f"Resetting environment for applicant: {target_candidate_id}")
+    # Check cache content just before reset for debugging
+    if tensor_cache and target_candidate_id:
+         print(f"Cache check before reset: Applicant '{str(target_candidate_id)}' in applicant_states: {str(target_candidate_id) in tensor_cache.applicant_states}")
+         
+    initial_state = env.reset(applicant_id=target_candidate_id)
+    
+    if not hasattr(env, 'current_state') or env.current_state is None:
+         raise ValueError("Environment reset failed - current_state is None or missing after reset.")
+    if initial_state is None:
+         raise ValueError("Environment reset failed - returned None state.")
+         
+    print(f"Environment reset successful. Initial state shape: {initial_state.shape}")
+    print(f"Environment setup complete with {reward_strategy} reward strategy.")
+    
+except Exception as e:
+    print(f"ERROR during env.reset or verification: {e}")
+    logger.error("Failed during initial environment reset", exc_info=True)
+    raise
 
 # %% [markdown]
 # ## 7. LLM Integration (If Using LLM-Based Reward Strategy)
