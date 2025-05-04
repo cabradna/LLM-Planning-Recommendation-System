@@ -448,7 +448,7 @@ print(f"Environment initialized with {reward_strategy} reward strategy.")
 
 # %%
 # Set up LLM in the environment for reward calculation
-if STRATEGY_CONFIG["llm"]["enabled"] and IN_COLAB:
+if STRATEGY_CONFIG["llm"]["enabled"] and (reward_strategy == "llm" or reward_strategy == "hybrid"):
     try:
         from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
         from huggingface_hub import login
@@ -458,6 +458,10 @@ if STRATEGY_CONFIG["llm"]["enabled"] and IN_COLAB:
             # Get token path from config
             token_path = HF_CONFIG["token_path"]
             
+            # Ensure an absolute path by resolving relative to project root
+            if not os.path.isabs(token_path):
+                token_path = os.path.abspath(os.path.join(os.path.dirname(__file__), token_path))
+            
             # Read the token from file
             with open(token_path, "r") as f:
                 token = f.read().strip()
@@ -466,8 +470,8 @@ if STRATEGY_CONFIG["llm"]["enabled"] and IN_COLAB:
             login(token=token)
             print(f"Successfully logged in to Hugging Face using token from {token_path}")
         except Exception as e:
-            print(f"Error authenticating with Hugging Face: {e}")
-            print("Will attempt to load model without authentication")
+            print(f"Warning: Error authenticating with Hugging Face: {e}")
+            print("Will attempt to load model without authentication - this may fail for some models")
         
         # LLM configuration from config
         model_id = STRATEGY_CONFIG["llm"]["model_id"]
@@ -492,46 +496,54 @@ if STRATEGY_CONFIG["llm"]["enabled"] and IN_COLAB:
             device_map="auto"
         )
         
-        print(f"LLM model loaded successfully.")
+        print(f"LLM model loaded successfully: {model_id}")
         
         # Create a new environment with LLM capabilities if needed
-        if reward_strategy in ["llm", "hybrid"]:
-            if not isinstance(env, (LLMSimulatorEnv, HybridEnv)):
-                print(f"Recreating environment with {reward_strategy} strategy and LLM support")
+        if not isinstance(env, (LLMSimulatorEnv, HybridEnv)):
+            print(f"Recreating environment with {reward_strategy} strategy and LLM support")
+            
+            if reward_strategy == "llm":
+                env = LLMSimulatorEnv(
+                    db_connector=db_connector,
+                    tensor_cache=tensor_cache,  # Pass tensor cache to new env
+                    reward_scheme=STRATEGY_CONFIG["llm"]["response_mapping"],
+                    random_seed=ENV_CONFIG["random_seed"],
+                    llm_model=llm_model,
+                    tokenizer=tokenizer
+                )
+            else:  # hybrid
+                env = HybridEnv(
+                    db_connector=db_connector,
+                    tensor_cache=tensor_cache,  # Pass tensor cache to new env
+                    reward_scheme=STRATEGY_CONFIG["llm"]["response_mapping"],
+                    cosine_weight=STRATEGY_CONFIG["hybrid"]["initial_cosine_weight"],
+                    random_seed=ENV_CONFIG["random_seed"],
+                    llm_model=llm_model,
+                    tokenizer=tokenizer
+                )
                 
-                if reward_strategy == "llm":
-                    env = LLMSimulatorEnv(
-                        db_connector=db_connector,
-                        tensor_cache=tensor_cache,  # Pass tensor cache to new env
-                        reward_scheme=STRATEGY_CONFIG["llm"]["response_mapping"],
-                        random_seed=ENV_CONFIG["random_seed"],
-                        llm_model=llm_model,
-                        tokenizer=tokenizer
-                    )
-                else:  # hybrid
-                    env = HybridEnv(
-                        db_connector=db_connector,
-                        tensor_cache=tensor_cache,  # Pass tensor cache to new env
-                        reward_scheme=STRATEGY_CONFIG["llm"]["response_mapping"],
-                        cosine_weight=STRATEGY_CONFIG["hybrid"]["initial_cosine_weight"],
-                        random_seed=ENV_CONFIG["random_seed"],
-                        llm_model=llm_model,
-                        tokenizer=tokenizer
-                    )
-                    
-                # Reset with the target candidate
-                env.reset(applicant_id=target_candidate_id)
+            # Reset with the target candidate
+            env.reset(applicant_id=target_candidate_id)
+        else:
+            # Add the LLM to the existing environment
+            if hasattr(env, 'setup_llm'):
+                env.setup_llm(llm_model, tokenizer)
             else:
-                # Just set the LLM in the existing environment
-                env.set_llm(llm_model, tokenizer)
-                print(f"Added LLM to existing {reward_strategy} environment")
+                # Fallback if setup_llm is not available
+                env.llm_model = llm_model
+                env.tokenizer = tokenizer
+            print(f"Added LLM to existing {reward_strategy} environment")
     except Exception as e:
         print(f"Error loading LLM: {e}")
-        print("Switching to cosine similarity reward strategy.")
+        print("Switching to cosine similarity reward strategy for training.")
         if hasattr(env, 'reward_strategy'):
             env.reward_strategy = "cosine"
         if hasattr(env, 'cosine_weight') and reward_strategy == "hybrid":
             env.cosine_weight = 1.0  # Full weight to cosine similarity
+        
+        # Update the agent's training strategy as well
+        agent.training_strategy = "cosine"
+        print("Agent and environment switched to 'cosine' training strategy due to LLM initialization failure.")
 
 # %% [markdown]
 # ## 8. Training Setup
@@ -574,7 +586,30 @@ num_pretraining_samples = TRAINING_CONFIG["pretraining"]["num_samples"]
 num_pretraining_epochs = TRAINING_CONFIG["pretraining"]["num_epochs"]
 batch_size = TRAINING_CONFIG["batch_size"]
 
-print(f"Starting pretraining with {reward_strategy} strategy...")
+# Check if we're using hybrid without LLM - force cosine for pretraining if LLM is not available
+pretraining_strategy = reward_strategy
+if reward_strategy == "hybrid" or reward_strategy == "llm":
+    # Check if LLM is available by inspecting the environment
+    llm_available = False
+    if isinstance(env, (LLMSimulatorEnv, HybridEnv)):
+        llm_available = hasattr(env, 'llm_model') and env.llm_model is not None and hasattr(env, 'tokenizer') and env.tokenizer is not None
+    
+    if not llm_available:
+        print("Warning: Hybrid or LLM strategy selected but LLM model not properly initialized.")
+        print("Switching to cosine similarity only for pretraining to avoid random simulation.")
+        pretraining_strategy = "cosine"
+        
+        # Temporarily modify environment to use only cosine rewards
+        if hasattr(env, 'reward_strategy'):
+            original_reward_strategy = env.reward_strategy
+            env.reward_strategy = "cosine"
+        
+        # Set cosine weight to 1.0 if it's a hybrid environment
+        if hasattr(env, 'cosine_weight'):
+            original_cosine_weight = env.cosine_weight
+            env.cosine_weight = 1.0
+
+print(f"Starting pretraining with {pretraining_strategy} strategy...")
 
 # Generate pretraining data using tensor cache
 print("Generating pretraining data using tensor cache")
@@ -585,22 +620,71 @@ state = env.reset(applicant_id=target_candidate_id)
 valid_job_indices = tensor_cache.get_valid_job_indices()
 print(f"Using {len(valid_job_indices)} valid jobs from tensor cache for pretraining")
 
-# Collect pretraining experiences
-for i in tqdm(range(min(num_pretraining_samples, len(valid_job_indices))), desc="Generating pretraining data"):
-    # Select a job index
-    job_idx = valid_job_indices[i % len(valid_job_indices)]
-    
-    # Take a step in the environment with this job
-    next_state, reward, done, _ = env.step(job_idx)
-    
-    # Store the experience as tensors
-    job_vector = tensor_cache.get_job_vector_by_index(job_idx)
-    pretraining_data.append((state, job_vector, reward, next_state))
-    
-    # Update state for next iteration
-    state = next_state
+# Get the valid actions from the environment to ensure indices match
+valid_actions = env.get_valid_actions()
+print(f"Environment has {len(valid_actions)} valid actions")
 
-print(f"Collected {len(pretraining_data)} pretraining experiences")
+# Create a mapping from tensor cache indices to environment action indices
+# This is necessary because the job indices in tensor cache may not align with
+# the action indices expected by the environment
+job_id_to_action_map = {}
+for action_idx in valid_actions:
+    # Get the job ID for this action from the environment
+    job = env.candidate_jobs[action_idx]
+    job_id = job.get("original_job_id")
+    
+    # Find this job ID in the tensor cache
+    if hasattr(tensor_cache, 'job_ids') and job_id in tensor_cache.job_ids:
+        cache_idx = tensor_cache.job_ids.index(job_id)
+        job_id_to_action_map[cache_idx] = action_idx
+
+print(f"Created mapping for {len(job_id_to_action_map)} jobs between tensor cache and environment")
+
+# Collect pretraining experiences
+samples_collected = 0
+skipped_samples = 0
+max_attempts = min(num_pretraining_samples * 2, len(valid_job_indices))  # Limit attempts to avoid infinite loops
+
+for i in tqdm(range(max_attempts), desc="Generating pretraining data"):
+    if samples_collected >= num_pretraining_samples:
+        break
+        
+    # Select a job index from tensor cache
+    cache_job_idx = valid_job_indices[i % len(valid_job_indices)]
+    
+    # Skip if we don't have a mapping for this cache index
+    if cache_job_idx not in job_id_to_action_map:
+        skipped_samples += 1
+        continue
+    
+    # Get the corresponding action index for the environment
+    action_idx = job_id_to_action_map[cache_job_idx]
+    
+    try:
+        # Take a step in the environment with this job
+        next_state, reward, done, _ = env.step(action_idx)
+        
+        # Store the experience as tensors
+        job_vector = tensor_cache.get_job_vector_by_index(cache_job_idx)
+        pretraining_data.append((state, job_vector, reward, next_state))
+        
+        # Update state for next iteration
+        state = next_state
+        samples_collected += 1
+    except Exception as e:
+        print(f"Error taking step with action {action_idx}: {e}")
+        skipped_samples += 1
+
+print(f"Collected {len(pretraining_data)} pretraining experiences ({skipped_samples} skipped)")
+
+# Restore environment settings if we temporarily changed them
+if pretraining_strategy != reward_strategy:
+    print(f"Restoring original reward strategy: {reward_strategy}")
+    if hasattr(env, 'reward_strategy') and 'original_reward_strategy' in locals():
+        env.reward_strategy = original_reward_strategy
+    
+    if hasattr(env, 'cosine_weight') and 'original_cosine_weight' in locals():
+        env.cosine_weight = original_cosine_weight
 
 # Create tensor batches directly
 # We assume state and next_state are tensors because env.reset() and env.step() should return tensors when using tensor_cache

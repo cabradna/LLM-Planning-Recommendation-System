@@ -1,0 +1,17 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+## Golden Rules: Project Integrity
+
+These rules define key aspects of the project that must **never** be violated. Before making changes, ensure all assumptions align with these principles.
+
+### 1. **Do not make up data**  
+- This is an **academic project**, meaning all data must originate from a specific, verified source.  
+- **Hallucinated or fabricated data is strictly prohibited**—the integrity of the research depends on accuracy.  
+- **Backup measures are not allowed**: If data retrieval fails, the system must **raise an exception** instead of substituting placeholder values.  
+- Every code modification must respect this constraint, ensuring consistency and reproducibility in academic findings.  
+
+
+Breaking these rules **compromises the integrity** of the project. Always validate your logic against them before proceeding with any changes.

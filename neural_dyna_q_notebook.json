@@ -17,16 +17,19 @@
             "name": "python",
             "nbconvert_exporter": "python",
             "pygments_lexer": "ipython3",
-            "version": "3.10"
+            "version": "3.10.12"
         },
         "colab": {
-            "provenance": []
+            "provenance": [],
+            "include_colab_link": true
         }
     },
     "cells": [
         {
             "cell_type": "markdown",
-            "metadata": {},
+            "metadata": {
+                "id": "intro-markdown"
+            },
             "source": [
                 "# Neural Dyna-Q for Job Recommendation: Model-Based RL Approach\n",
                 "\n",
@@ -36,7 +39,9 @@
         },
         {
             "cell_type": "markdown",
-            "metadata": {},
+            "metadata": {
+                "id": "overview-markdown"
+            },
             "source": [
                 "## 1. Introduction and Overview\n",
                 "\n",
@@ -70,7 +75,9 @@
         },
         {
             "cell_type": "markdown",
-            "metadata": {},
+            "metadata": {
+                "id": "setup-markdown"
+            },
             "source": [
                 "## 2. Environment Setup\n",
                 "\n",
@@ -80,7 +87,9 @@
         {
             "cell_type": "code",
             "execution_count": null,
-            "metadata": {},
+            "metadata": {
+                "id": "setup-code"
+            },
             "outputs": [],
             "source": [
                 "# Check if running in Google Colab\n",
@@ -181,7 +190,9 @@
         {
             "cell_type": "code",
             "execution_count": null,
-            "metadata": {},
+            "metadata": {
+                "id": "imports-code"
+            },
             "outputs": [],
             "source": [
                 "# Standard imports for data manipulation, visualization, and deep learning\n",
@@ -233,7 +244,9 @@
         },
         {
             "cell_type": "markdown",
-            "metadata": {},
+            "metadata": {
+                "id": "database-markdown"
+            },
             "source": [
                 "## 4. Database Connection\n",
                 "\n",
@@ -249,7 +262,9 @@
         {
             "cell_type": "code",
             "execution_count": null,
-            "metadata": {},
+            "metadata": {
+                "id": "database-code"
+            },
             "outputs": [],
             "source": [
                 "# Get reward strategy settings from config\n",
@@ -270,7 +285,9 @@
         },
         {
             "cell_type": "markdown",
-            "metadata": {},
+            "metadata": {
+                "id": "data-loading-markdown"
+            },
             "source": [
                 "## 5. Data Loading and Tensor Cache Initialization\n",
                 "\n",
@@ -284,7 +301,9 @@
         {
             "cell_type": "code",
             "execution_count": null,
-            "metadata": {},
+            "metadata": {
+                "id": "data-loading-code"
+            },
             "outputs": [],
             "source": [
                 "# Query the database to get a list of candidate IDs\n",
@@ -354,7 +373,9 @@
         },
         {
             "cell_type": "markdown",
-            "metadata": {},
+            "metadata": {
+                "id": "model-init-markdown"
+            },
             "source": [
                 "## 6. Model Initialization\n",
                 "\n",
@@ -370,7 +391,9 @@
         {
             "cell_type": "code",
             "execution_count": null,
-            "metadata": {},
+            "metadata": {
+                "id": "model-init-code"
+            },
             "outputs": [],
             "source": [
                 "# Initialize Q-Network\n",
@@ -418,7 +441,9 @@
         },
         {
             "cell_type": "markdown",
-            "metadata": {},
+            "metadata": {
+                "id": "llm-integration-markdown"
+            },
             "source": [
                 "## 7. LLM Integration (If Using LLM-Based Reward Strategy)\n",
                 "\n",
@@ -430,7 +455,9 @@
         {
             "cell_type": "code",
             "execution_count": null,
-            "metadata": {},
+            "metadata": {
+                "id": "llm-integration-code"
+            },
             "outputs": [],
             "source": [
                 "if STRATEGY_CONFIG[\"llm\"][\"enabled\"] and IN_COLAB:\n",
@@ -521,7 +548,9 @@
         },
         {
             "cell_type": "markdown",
-            "metadata": {},
+            "metadata": {
+                "id": "training-setup-markdown"
+            },
             "source": [
                 "## 8. Training Setup\n",
                 "\n",
@@ -536,7 +565,9 @@
         {
             "cell_type": "code",
             "execution_count": null,
-            "metadata": {},
+            "metadata": {
+                "id": "training-setup-code"
+            },
             "outputs": [],
             "source": [
                 "# Verify the agent is properly set up\n",
@@ -557,7 +588,9 @@
         },
         {
             "cell_type": "markdown",
-            "metadata": {},
+            "metadata": {
+                "id": "pretraining-markdown"
+            },
             "source": [
                 "## 9. Pretraining Phase\n",
                 "\n",
@@ -571,7 +604,9 @@
         {
             "cell_type": "code",
             "execution_count": null,
-            "metadata": {},
+            "metadata": {
+                "id": "pretraining-code"
+            },
             "outputs": [],
             "source": [
                 "# Define pretraining parameters from config\n",
@@ -641,7 +676,9 @@
         },
         {
             "cell_type": "markdown",
-            "metadata": {},
+            "metadata": {
+                "id": "main-training-loop-markdown"
+            },
             "source": [
                 "## 10. Main Training Loop\n",
                 "\n",
@@ -760,7 +797,9 @@
         },
         {
             "cell_type": "markdown",
-            "metadata": {},
+            "metadata": {
+                "id": "loading-visualizing-markdown"
+            },
             "source": [
                 "## 10.1 Loading and Visualizing Saved Experiment Results\n",
                 "\n",
@@ -830,7 +869,9 @@
         },
         {
             "cell_type": "markdown",
-            "metadata": {},
+            "metadata": {
+                "id": "evaluation-markdown"
+            },
             "source": [
                 "## 11. Evaluation\n",
                 "\n",
@@ -888,7 +929,9 @@
         },
         {
             "cell_type": "markdown",
-            "metadata": {},
+            "metadata": {
+                "id": "job-recommendation-markdown"
+            },
             "source": [
                 "## 12. Generate Job Recommendations\n",
                 "\n",
@@ -974,7 +1017,9 @@
         },
         {
             "cell_type": "markdown",
-            "metadata": {},
+            "metadata": {
+                "id": "conclusion-markdown"
+            },
             "source": [
                 "## 13. Conclusion and Next Steps\n",
                 "\n",
@@ -1005,7 +1050,9 @@
         {
             "cell_type": "code",
             "execution_count": null,
-            "metadata": {},
+            "metadata": {
+                "id": "cleanup-code"
+            },
             "outputs": [],
             "source": [
                 "# Clean up resources\n",

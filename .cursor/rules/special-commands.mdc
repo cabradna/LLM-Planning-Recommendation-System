@@ -1,0 +1,51 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+## Cursor Rules: Keyword Commands
+
+### #analysis
+When encountering **#analysis**, evaluate the code in the context of the entire codebase. Your response must:
+
+- **Evaluate interdependencies**  
+  - Determine how the discussed code interacts with functions, variables, and modules elsewhere.  
+  - Identify dependencies that might not be explicitly referenced within the snippet.  
+
+- **Assess architectural impact**  
+  - Analyze how changes might affect performance, maintainability, and scalability.  
+  - Consider consequences for future development and integration.  
+
+- **Recognize implicit dependencies**  
+  - Look for indirect relationships, such as shared libraries, initialization sequences, or background processes that rely on this logic.  
+
+- **Justify decisions rigorously**  
+  - Provide a reasoned explanation, linking insights to broader design choices rather than isolated correctness.  
+
+- **Anticipate edge cases**  
+  - Assess potential unintended behaviors, regressions, or workflow disruptions.  
+  - Ensure your reasoning accounts for rare or unexpected inputs.  
+
+Following these principles ensures a thoughtful and precise analysis that aligns with the overall system architecture.
+
+### #justexplain
+When encountering **#justexplain**, do **not** make changes. Instead, perform a **detailed analysis** of the issue and provide a **thorough explanation**. Your response must:
+
+- **Inspect all relevant files**  
+  - Identify dependencies, affected modules, and related code sections.  
+  - Gather context necessary to understand the issue fully.  
+
+- **Analyze the issue deeply**  
+  - Define the core problem with clarity and precision.  
+  - Explore potential contributing factors, including architectural or logic-based constraints.  
+
+- **Provide a rationale for understanding**  
+  - Explain why the issue is occurring in detail, referencing code behavior and dependencies.  
+  - Clarify assumptions, edge cases, and any limitations.  
+
+- **Offer a proposed fix (without implementation)**  
+  - Detail **how** the issue can be resolved while preserving system integrity.  
+  - Highlight any trade-offs and the implications of different approaches.  
+
+
+The goal of **#justexplain** is to **illuminate the problem comprehensively** before any coding action is taken. Responses should be **analytical, precise, and well-supported** rather than speculative.  

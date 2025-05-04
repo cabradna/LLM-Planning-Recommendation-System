@@ -170,6 +170,9 @@ class JobRecommendationEnv:
                 - float: Reward value
                 - bool: Done flag (always False in continuous recommendation)
                 - Dict: Additional info
+                
+        Raises:
+            RuntimeError: If using a reward strategy other than "cosine" in the base environment
         """
         if action_idx < 0 or action_idx >= len(self.candidate_jobs):
             raise ValueError(f"Invalid action index: {action_idx}. Must be between 0 and {len(self.candidate_jobs)-1}")
@@ -182,10 +185,12 @@ class JobRecommendationEnv:
         if self.reward_strategy == "cosine":
             reward = self.calculate_cosine_reward(action_idx)
         else:
-            # For LLM and hybrid strategies, simulate user response
-            response = self.simulate_user_response(job)
-            # Calculate reward based on response
-            reward = self.reward_scheme.get(response, 0.0)
+            # Base class only supports cosine similarity rewards
+            raise RuntimeError(
+                f"The base JobRecommendationEnv only supports 'cosine' reward strategy, "
+                f"but '{self.reward_strategy}' was requested. Use appropriate subclass "
+                f"(LLMSimulatorEnv or HybridEnv) for non-cosine reward strategies."
+            )
         
         # In the current phase, state doesn't change after action
         next_state = self.current_state
@@ -312,38 +317,6 @@ class JobRecommendationEnv:
             return (cos_sim + 1) / 2  # Scale from [-1,1] to [0,1]
         else:
             return cos_sim  # Keep in [-1,1] range
-    
-    def simulate_user_response(self, job: Dict) -> str:
-        """
-        Simulate a user's response to a job recommendation.
-        
-        In a real system, this would be replaced by actual user feedback.
-        This simple simulation is a placeholder for testing/development.
-        In production, this could be replaced by an LLM-based simulator
-        or connect to a user interface for real feedback.
-        
-        Args:
-            job: Job document from the database.
-            
-        Returns:
-            str: Response type ('APPLY', 'SAVE', 'CLICK', 'IGNORE')
-        """
-        # Simple random simulation as a placeholder
-        # In practice, should implement a more sophisticated simulation
-        # based on job-applicant match quality
-        response_probs = {
-            'APPLY': 0.1,   # 10% chance the user applies
-            'SAVE': 0.2,    # 20% chance the user saves
-            'CLICK': 0.3,   # 30% chance the user clicks/views
-            'IGNORE': 0.4   # 40% chance the user ignores
-        }
-        
-        # Get a random response based on the probabilities
-        responses = list(response_probs.keys())
-        probs = list(response_probs.values())
-        response = self.rng.choice(responses, p=probs)
-        
-        return response
     
     def calculate_all_cosine_rewards(self) -> torch.Tensor:
         """
@@ -636,55 +609,58 @@ class LLMSimulatorEnv(JobRecommendationEnv):
         """
         Use an LLM to simulate user response to a job recommendation.
         
-        This override replaces the random simulation with an LLM-based simulation
-        that analyzes the applicant profile and job details to generate a realistic
-        response.
+        This method requires a properly initialized LLM model and tokenizer.
+        It will throw an error if any required component is missing.
         
         Args:
             job: Job document from the database.
             
         Returns:
             str: Response type ('APPLY', 'SAVE', 'CLICK', 'IGNORE')
+            
+        Raises:
+            RuntimeError: If LLM is not properly initialized or data is missing
         """
         if not self.llm_model or not self.tokenizer:
-            logger.warning("LLM model or tokenizer not provided, falling back to random simulation")
-            return super().simulate_user_response(job)
+            raise RuntimeError(
+                "LLM model or tokenizer not provided. For an academic project, random simulation "
+                "is not acceptable. Either properly initialize the LLM or use cosine similarity instead."
+            )
         
-        try:
-            # Get job details
-            job_id = job.get("original_job_id", job.get("_id"))
-            job_details = self.db.get_job_details(job_id)
-            
-            if not job_details:
-                logger.warning(f"No details found for job {job_id}, falling back to random simulation")
-                return super().simulate_user_response(job)
-            
-            job_title = job_details.get("job_title", "Unknown Position")
-            job_description = job_details.get("description", "No description available.")
-            
-            # Get applicant profile
-            applicant_profile = self.applicant_profiles.get(self.current_applicant_id)
-            
-            if not applicant_profile:
-                logger.warning(f"No profile found for applicant {self.current_applicant_id}, falling back to random simulation")
-                return super().simulate_user_response(job)
-            
-            # Build prompt for LLM
-            prompt = self._build_llm_prompt(applicant_profile, job_title, job_description)
-            
-            # Get LLM response
-            response = self._get_llm_decision(prompt)
-            
-            # Map LLM response to predefined response types
-            mapped_response = self._map_llm_response(response)
-            
-            logger.debug(f"LLM simulation: {mapped_response} for job {job_title}")
-            
-            return mapped_response
-            
-        except Exception as e:
-            logger.error(f"Error in LLM simulation: {e}")
-            return super().simulate_user_response(job)
+        # Get job details
+        job_id = job.get("original_job_id", job.get("_id"))
+        job_details = self.db.get_job_details(job_id)
+        
+        if not job_details:
+            raise RuntimeError(
+                f"No details found for job {job_id}. Cannot generate LLM-based response "
+                "without proper job details."
+            )
+        
+        job_title = job_details.get("job_title", "Unknown Position")
+        job_description = job_details.get("description", "No description available.")
+        
+        # Get applicant profile
+        applicant_profile = self.applicant_profiles.get(self.current_applicant_id)
+        
+        if not applicant_profile:
+            raise RuntimeError(
+                f"No profile found for applicant {self.current_applicant_id}. Cannot generate "
+                "LLM-based response without proper applicant profile."
+            )
+        
+        # Build prompt for LLM
+        prompt = self._build_llm_prompt(applicant_profile, job_title, job_description)
+        
+        # Get LLM response
+        response = self._get_llm_decision(prompt)
+        
+        # Map LLM response to predefined response types
+        mapped_response = self._map_llm_response(response)
+        
+        logger.debug(f"LLM simulation: {mapped_response} for job {job_title}")
+        
+        return mapped_response
     
     def _build_llm_prompt(self, applicant_profile: Dict, job_title: str, job_description: str) -> str:
         """
@@ -732,32 +708,30 @@ Provide your answer as a single word: APPLY, SAVE, CLICK, or IGNORE.
             
         Returns:
             str: LLM response text.
+            
+        Raises:
+            Exception: Any errors during LLM processing are propagated up
         """
-        try:
-            # Tokenize the prompt
-            inputs = self.tokenizer(prompt, return_tensors="pt").to(self.device)
-            
-            # Generate response
-            with torch.no_grad():
-                outputs = self.llm_model.generate(
-                    **inputs,
-                    max_new_tokens=50,
-                    temperature=0.2,
-                    do_sample=True,
-                    top_p=0.95
-                )
-            
-            # Decode the response
-            response = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
-            
-            # Extract the part after the prompt
-            response_only = response[len(prompt):].strip()
-            
-            return response_only
-            
-        except Exception as e:
-            logger.error(f"Error generating LLM response: {e}")
-            return "IGNORE"  # Default to IGNORE on error
+        # Tokenize the prompt
+        inputs = self.tokenizer(prompt, return_tensors="pt").to(self.device)
+        
+        # Generate response
+        with torch.no_grad():
+            outputs = self.llm_model.generate(
+                **inputs,
+                max_new_tokens=50,
+                temperature=0.2,
+                do_sample=True,
+                top_p=0.95
+            )
+        
+        # Decode the response
+        response = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
+        
+        # Extract the part after the prompt
+        response_only = response[len(prompt):].strip()
+        
+        return response_only
     
     def _map_llm_response(self, response: str) -> str:
         """
@@ -768,6 +742,9 @@ Provide your answer as a single word: APPLY, SAVE, CLICK, or IGNORE.
             
         Returns:
             str: Mapped response type ('APPLY', 'SAVE', 'CLICK', 'IGNORE').
+            
+        Raises:
+            ValueError: If the LLM response cannot be mapped to a valid response type
         """
         response_lower = response.lower()
         
@@ -780,9 +757,8 @@ Provide your answer as a single word: APPLY, SAVE, CLICK, or IGNORE.
         elif "ignore" in response_lower:
             return "IGNORE"
         else:
-            # Default to IGNORE if response is unclear
-            logger.warning(f"Unclear LLM response: {response}, defaulting to IGNORE")
-            return "IGNORE"
+            # Raise error on unclear response
+            raise ValueError(f"Unclear LLM response: '{response}'. Cannot map to a valid response type.")
 
 
 class HybridEnv(LLMSimulatorEnv):

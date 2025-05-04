@@ -32,7 +32,13 @@ logger = logging.getLogger(__name__)
 
 # Login to Hugging Face
 try:
-    with open(HF_CONFIG["token_path"], "r") as f:
+    token_path = HF_CONFIG["token_path"]
+    
+    # Ensure an absolute path by resolving relative to project root
+    if not os.path.isabs(token_path):
+        token_path = os.path.abspath(os.path.join(os.path.dirname(os.path.dirname(__file__)), token_path))
+    
+    with open(token_path, "r") as f:
         token = f.read().strip()
     login(token=token)
     logger.info("Successfully logged in to Hugging Face")

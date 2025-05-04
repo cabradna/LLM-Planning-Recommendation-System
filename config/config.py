@@ -3,6 +3,7 @@ Configuration settings for the Dyna-Q Job Recommender model.
 """
 
 import torch
+import os
 
 # Environment Configuration
 ENV_CONFIG = {
@@ -16,7 +17,9 @@ ENV_CONFIG = {
 
 # Hugging Face Configuration
 HF_CONFIG = {
-    "token_path": "hf_primary_token.txt"
+    "token_path": "hf_primary_token.txt",
+    "base_dir": os.path.dirname(os.path.dirname(os.path.abspath(__file__))),  # Project root directory
+    "allow_path_traversal": True  # Whether to search for the token file in parent directories
 }
 
 # Database Configuration
