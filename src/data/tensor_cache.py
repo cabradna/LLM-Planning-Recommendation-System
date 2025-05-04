@@ -101,9 +101,6 @@ class TensorCache:
         """
         Load all jobs with valid embeddings from database.
         
-        Filters for jobs that have all required embedding fields as specified in
-        the database_structure.md documentation.
-        
         Args:
             db_connector: DatabaseConnector instance
         """
@@ -117,28 +114,19 @@ class TensorCache:
         all_embeddings = list(db_connector.db[db_connector.collections["job_embeddings"]].find({}))
         logger.info(f"Retrieved {len(all_embeddings)} job embeddings")
         
-        # 3. Filter for jobs with complete embeddings (as per database_structure.md)
-        # Required fields: job_title_embeddings, tech_skills_vectors, soft_skills_embeddings
-        valid_embeddings = []
-        valid_job_ids = []
+        # 3. Get valid job IDs from embeddings
+        valid_job_ids = [str(emb["original_job_id"]) for emb in all_embeddings]
         
-        for emb in all_embeddings:
-            # Check for required fields
-            if (
-                "job_title_embeddings" in emb and len(emb.get("job_title_embeddings", [])) > 0 and
-                "tech_skills_vectors" in emb and len(emb.get("tech_skills_vectors", [])) > 0 and
-                "soft_skills_embeddings" in emb and len(emb.get("soft_skills_embeddings", [])) > 0
-            ):
-                job_id = emb["original_job_id"]
-                valid_embeddings.append(emb)
-                valid_job_ids.append(str(job_id))
+        # 4. Get valid job vectors using valid_only=True
+        job_vectors = db_connector.get_job_vectors(valid_job_ids, valid_only=True)
+        valid_job_ids = [job_id for job_id in valid_job_ids if job_id in [str(emb["original_job_id"]) for emb in all_embeddings]]
         
         logger.info(f"Found {len(valid_job_ids)} jobs with complete embeddings")
         
-        # 4. Store job IDs for later reference
+        # 5. Store job IDs for later reference
         self.job_ids = valid_job_ids
         
-        # 5. Store job metadata for each valid job
+        # 6. Store job metadata for each valid job
         job_id_to_doc = {str(job["_id"]): job for job in all_jobs}
         
         for job_id in valid_job_ids:
@@ -153,59 +141,8 @@ class TensorCache:
         
         logger.info(f"Stored metadata for {len(self.job_metadata)} jobs")
         
-        # 6. Create mapping from job ID to embedding
-        emb_by_id = {str(e["original_job_id"]): e for e in valid_embeddings}
-        
-        # 7. Determine embedding dimension from the data
-        sample_emb = valid_embeddings[0]
-        job_title_dim = len(sample_emb.get("job_title_embeddings", []))
-        tech_skills_dim = len(sample_emb.get("tech_skills_vectors", []))
-        soft_skills_dim = len(sample_emb.get("soft_skills_embeddings", []))
-        exp_requirements_dim = 384  # Experience requirements dimension (always 384)
-        
-        total_dim = job_title_dim + tech_skills_dim + soft_skills_dim + exp_requirements_dim
-        logger.info(f"Job vector dimension: {total_dim} (title: {job_title_dim}, tech: {tech_skills_dim}, soft: {soft_skills_dim}, exp: {exp_requirements_dim})")
-        
-        # 8. Initialize the job vectors tensor
-        self.job_vectors = torch.zeros((len(valid_job_ids), total_dim), device=self.device)
-        
-        # 9. Fill the job vectors tensor
-        for idx, job_id in enumerate(valid_job_ids):
-            if job_id in emb_by_id:
-                emb = emb_by_id[job_id]
-                
-                # Get embedding components
-                job_title_emb = torch.tensor(emb.get("job_title_embeddings", []), dtype=torch.float32).to(self.device)
-                tech_skills_emb = torch.tensor(emb.get("tech_skills_vectors", []), dtype=torch.float32).to(self.device)
-                soft_skills_emb = torch.tensor(emb.get("soft_skills_embeddings", []), dtype=torch.float32).to(self.device)
-                
-                # Concatenate embeddings in the correct order to match applicant vectors
-                # Applicant vectors are [hard_skills, soft_skills]
-                combined_vector = torch.cat([
-                    tech_skills_emb,  # Tech/hard skills - matches applicant hard_skills_embedding
-                    soft_skills_emb,  # Soft skills - matches applicant soft_skills_embedding
-                    job_title_emb     # Job title - extra info not in applicant vector
-                ])
-
-                # Add experience requirements embedding (handle if missing)
-                if "experience_requirements_embeddings" in emb and len(emb.get("experience_requirements_embeddings", [])) > 0:
-                    exp_requirements_emb = torch.tensor(emb.get("experience_requirements_embeddings", []), dtype=torch.float32).to(self.device)
-                else:
-                    # Fallback: use zero vector of expected dimension
-                    logger.warning(f"Missing experience_requirements_embeddings for job {job_id}. Using zero vector.")
-                    exp_requirements_emb = torch.zeros(384, dtype=torch.float32, device=self.device)
-                
-                # Concatenate all four components in same order as database.py
-                combined_vector = torch.cat([
-                    tech_skills_emb,      # Tech/hard skills - matches applicant hard_skills_embedding
-                    soft_skills_emb,      # Soft skills - matches applicant soft_skills_embedding
-                    job_title_emb,        # Job title - extra info not in applicant vector
-                    exp_requirements_emb  # Experience - extra info not in applicant vector
-                ])
-                
-                # Store in the tensor
-                self.job_vectors[idx] = combined_vector
-        
+        # 7. Store job vectors
+        self.job_vectors = torch.stack(job_vectors).to(self.device)
         logger.info(f"Created job vectors tensor with shape {self.job_vectors.shape}")
     
     def get_applicant_state(self, applicant_id):

@@ -449,101 +449,44 @@ print(f"Environment initialized with {reward_strategy} reward strategy.")
 # %%
 # Set up LLM in the environment for reward calculation
 if STRATEGY_CONFIG["llm"]["enabled"] and (reward_strategy == "llm" or reward_strategy == "hybrid"):
-    try:
-        from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
-        from huggingface_hub import login
-        
-        # Authenticate with Hugging Face using token from file
-        try:
-            # Get token path from config
-            token_path = HF_CONFIG["token_path"]
-            
-            # Ensure an absolute path by resolving relative to project root
-            if not os.path.isabs(token_path):
-                token_path = os.path.abspath(os.path.join(os.path.dirname(__file__), token_path))
-            
-            # Read the token from file
-            with open(token_path, "r") as f:
-                token = f.read().strip()
-                
-            # Login to Hugging Face
-            login(token=token)
-            print(f"Successfully logged in to Hugging Face using token from {token_path}")
-        except Exception as e:
-            print(f"Warning: Error authenticating with Hugging Face: {e}")
-            print("Will attempt to load model without authentication - this may fail for some models")
-        
-        # LLM configuration from config
-        model_id = STRATEGY_CONFIG["llm"]["model_id"]
-        
-        # Configure quantization settings from config
-        bnb_config = BitsAndBytesConfig(
-            load_in_4bit=STRATEGY_CONFIG["llm"]["quantization"]["load_in_4bit"],
-            bnb_4bit_quant_type=STRATEGY_CONFIG["llm"]["quantization"]["quant_type"],
-            bnb_4bit_use_nested_quant=STRATEGY_CONFIG["llm"]["quantization"]["use_nested_quant"],
-            bnb_4bit_compute_dtype=torch.bfloat16 
-        )
-        
-        print(f"Loading tokenizer for model: {model_id}")
-        tokenizer = AutoTokenizer.from_pretrained(model_id)
-        
-        print(f"Loading model {model_id} with 4-bit quantization...")
-        
-        # Load the model with quantization for efficiency
-        llm_model = AutoModelForCausalLM.from_pretrained(
-            model_id,
-            quantization_config=bnb_config,
-            device_map="auto"
-        )
-        
-        print(f"LLM model loaded successfully: {model_id}")
-        
-        # Create a new environment with LLM capabilities if needed
-        if not isinstance(env, (LLMSimulatorEnv, HybridEnv)):
-            print(f"Recreating environment with {reward_strategy} strategy and LLM support")
-            
-            if reward_strategy == "llm":
-                env = LLMSimulatorEnv(
-                    db_connector=db_connector,
-                    tensor_cache=tensor_cache,  # Pass tensor cache to new env
-                    reward_scheme=STRATEGY_CONFIG["llm"]["response_mapping"],
-                    random_seed=ENV_CONFIG["random_seed"],
-                    llm_model=llm_model,
-                    tokenizer=tokenizer
-                )
-            else:  # hybrid
-                env = HybridEnv(
-                    db_connector=db_connector,
-                    tensor_cache=tensor_cache,  # Pass tensor cache to new env
-                    reward_scheme=STRATEGY_CONFIG["llm"]["response_mapping"],
-                    cosine_weight=STRATEGY_CONFIG["hybrid"]["initial_cosine_weight"],
-                    random_seed=ENV_CONFIG["random_seed"],
-                    llm_model=llm_model,
-                    tokenizer=tokenizer
-                )
-                
-            # Reset with the target candidate
-            env.reset(applicant_id=target_candidate_id)
-        else:
-            # Add the LLM to the existing environment
-            if hasattr(env, 'setup_llm'):
-                env.setup_llm(llm_model, tokenizer)
-            else:
-                # Fallback if setup_llm is not available
-                env.llm_model = llm_model
-                env.tokenizer = tokenizer
-            print(f"Added LLM to existing {reward_strategy} environment")
-    except Exception as e:
-        print(f"Error loading LLM: {e}")
-        print("Switching to cosine similarity reward strategy for training.")
-        if hasattr(env, 'reward_strategy'):
-            env.reward_strategy = "cosine"
-        if hasattr(env, 'cosine_weight') and reward_strategy == "hybrid":
-            env.cosine_weight = 1.0  # Full weight to cosine similarity
-        
-        # Update the agent's training strategy as well
-        agent.training_strategy = "cosine"
-        print("Agent and environment switched to 'cosine' training strategy due to LLM initialization failure.")
+    from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+    from huggingface_hub import login
+    
+    # Get token path from config and read token
+    token_path = HF_CONFIG["token_path"]
+    if not os.path.isabs(token_path):
+        token_path = token_path
+    with open(token_path, "r") as f:
+        token = f.read().strip()
+    
+    # Login to Hugging Face
+    login(token=token)
+    print(f"Successfully logged in to Hugging Face using token from {token_path}")
+    
+    # Load model and tokenizer
+    model_id = STRATEGY_CONFIG["llm"]["model_id"]
+    bnb_config = BitsAndBytesConfig(
+        load_in_4bit=STRATEGY_CONFIG["llm"]["quantization"]["load_in_4bit"],
+        bnb_4bit_quant_type=STRATEGY_CONFIG["llm"]["quantization"]["quant_type"],
+        bnb_4bit_use_nested_quant=STRATEGY_CONFIG["llm"]["quantization"]["use_nested_quant"],
+        bnb_4bit_compute_dtype=torch.bfloat16 
+    )
+    
+    print(f"Loading tokenizer for model: {model_id}")
+    tokenizer = AutoTokenizer.from_pretrained(model_id)
+    
+    print(f"Loading model {model_id} with 4-bit quantization...")
+    llm_model = AutoModelForCausalLM.from_pretrained(
+        model_id,
+        quantization_config=bnb_config,
+        device_map="auto"
+    )
+    
+    print(f"LLM model loaded successfully: {model_id}")
+    
+    # Add LLM to the environment
+    env.setup_llm(llm_model, tokenizer)
+    print(f"Added LLM to {reward_strategy} environment")
 
 # %% [markdown]
 # ## 8. Training Setup
@@ -586,28 +529,8 @@ num_pretraining_samples = TRAINING_CONFIG["pretraining"]["num_samples"]
 num_pretraining_epochs = TRAINING_CONFIG["pretraining"]["num_epochs"]
 batch_size = TRAINING_CONFIG["batch_size"]
 
-# Check if we're using hybrid without LLM - force cosine for pretraining if LLM is not available
+# Use the configured reward strategy for pretraining
 pretraining_strategy = reward_strategy
-if reward_strategy == "hybrid" or reward_strategy == "llm":
-    # Check if LLM is available by inspecting the environment
-    llm_available = False
-    if isinstance(env, (LLMSimulatorEnv, HybridEnv)):
-        llm_available = hasattr(env, 'llm_model') and env.llm_model is not None and hasattr(env, 'tokenizer') and env.tokenizer is not None
-    
-    if not llm_available:
-        print("Warning: Hybrid or LLM strategy selected but LLM model not properly initialized.")
-        print("Switching to cosine similarity only for pretraining to avoid random simulation.")
-        pretraining_strategy = "cosine"
-        
-        # Temporarily modify environment to use only cosine rewards
-        if hasattr(env, 'reward_strategy'):
-            original_reward_strategy = env.reward_strategy
-            env.reward_strategy = "cosine"
-        
-        # Set cosine weight to 1.0 if it's a hybrid environment
-        if hasattr(env, 'cosine_weight'):
-            original_cosine_weight = env.cosine_weight
-            env.cosine_weight = 1.0
 
 print(f"Starting pretraining with {pretraining_strategy} strategy...")
 
@@ -625,102 +548,43 @@ valid_actions = env.get_valid_actions()
 print(f"Environment has {len(valid_actions)} valid actions")
 
 # Create a mapping from tensor cache indices to environment action indices
-# This is necessary because the job indices in tensor cache may not align with
-# the action indices expected by the environment
 job_id_to_action_map = {}
 for action_idx in valid_actions:
-    # Get the job ID for this action from the environment
     job = env.candidate_jobs[action_idx]
-    job_id = job.get("original_job_id")
-    
-    # Find this job ID in the tensor cache
-    if hasattr(tensor_cache, 'job_ids') and job_id in tensor_cache.job_ids:
+    job_id = job.get("_id")
+    if job_id in tensor_cache.job_ids:
         cache_idx = tensor_cache.job_ids.index(job_id)
         job_id_to_action_map[cache_idx] = action_idx
+        print(f"Mapped tensor cache job {job_id} (index {cache_idx}) to environment action {action_idx}")
 
 print(f"Created mapping for {len(job_id_to_action_map)} jobs between tensor cache and environment")
 
 # Collect pretraining experiences
 samples_collected = 0
-skipped_samples = 0
-max_attempts = min(num_pretraining_samples * 2, len(valid_job_indices))  # Limit attempts to avoid infinite loops
+max_attempts = min(num_pretraining_samples * 2, len(valid_job_indices))
 
 for i in tqdm(range(max_attempts), desc="Generating pretraining data"):
     if samples_collected >= num_pretraining_samples:
         break
         
-    # Select a job index from tensor cache
     cache_job_idx = valid_job_indices[i % len(valid_job_indices)]
-    
-    # Skip if we don't have a mapping for this cache index
     if cache_job_idx not in job_id_to_action_map:
-        skipped_samples += 1
         continue
     
-    # Get the corresponding action index for the environment
     action_idx = job_id_to_action_map[cache_job_idx]
-    
-    try:
-        # Take a step in the environment with this job
-        next_state, reward, done, _ = env.step(action_idx)
-        
-        # Store the experience as tensors
-        job_vector = tensor_cache.get_job_vector_by_index(cache_job_idx)
-        pretraining_data.append((state, job_vector, reward, next_state))
-        
-        # Update state for next iteration
-        state = next_state
-        samples_collected += 1
-    except Exception as e:
-        print(f"Error taking step with action {action_idx}: {e}")
-        skipped_samples += 1
+    next_state, reward, done, _ = env.step(action_idx)
+    job_vector = tensor_cache.get_job_vector_by_index(cache_job_idx)
+    pretraining_data.append((state, job_vector, reward, next_state))
+    state = next_state
+    samples_collected += 1
 
-print(f"Collected {len(pretraining_data)} pretraining experiences ({skipped_samples} skipped)")
+print(f"Collected {len(pretraining_data)} pretraining experiences")
 
-# Restore environment settings if we temporarily changed them
-if pretraining_strategy != reward_strategy:
-    print(f"Restoring original reward strategy: {reward_strategy}")
-    if hasattr(env, 'reward_strategy') and 'original_reward_strategy' in locals():
-        env.reward_strategy = original_reward_strategy
-    
-    if hasattr(env, 'cosine_weight') and 'original_cosine_weight' in locals():
-        env.cosine_weight = original_cosine_weight
-
-# Create tensor batches directly
-# We assume state and next_state are tensors because env.reset() and env.step() should return tensors when using tensor_cache
-# We assume job_vector is a tensor because we got it directly from tensor_cache
-# Only reward might need conversion if it's a scalar
-
-# Stack states
+# Create tensor batches
 states = torch.stack([d[0] for d in pretraining_data])
-
-# Stack actions (job vectors)
 actions = torch.stack([d[1] for d in pretraining_data])
-
-# Convert rewards to tensor if needed
-if isinstance(pretraining_data[0][2], torch.Tensor):
-    rewards = torch.stack([d[2] for d in pretraining_data])
-else:
-    rewards = torch.tensor([d[2] for d in pretraining_data], device=device)
-
-# Stack next states
+rewards = torch.tensor([d[2] for d in pretraining_data], device=device)
 next_states = torch.stack([d[3] for d in pretraining_data])
-
-# Verify dimensions
-print(f"States shape: {states.shape}")
-print(f"Actions shape: {actions.shape}")
-print(f"Rewards shape: {rewards.shape}")
-print(f"Next states shape: {next_states.shape}")
-print(f"Expected state_dim: {MODEL_CONFIG['q_network']['state_dim']}")
-print(f"Expected action_dim: {MODEL_CONFIG['q_network']['action_dim']}")
-
-# Verify state and action dimensions
-state_dim = states.shape[1]
-action_dim = actions.shape[1]
-if state_dim != MODEL_CONFIG['q_network']['state_dim']:
-    raise ValueError(f"State dimension mismatch. Got {state_dim}, expected {MODEL_CONFIG['q_network']['state_dim']}")
-if action_dim != MODEL_CONFIG['q_network']['action_dim']:
-    raise ValueError(f"Action dimension mismatch. Got {action_dim}, expected {MODEL_CONFIG['q_network']['action_dim']}")
 
 # Run pretraining using agent's built-in pretrain method
 print("Starting pretraining of neural networks")

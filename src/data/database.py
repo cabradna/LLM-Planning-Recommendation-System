@@ -227,12 +227,13 @@ class DatabaseConnector:
             logger.error(f"Error sampling candidate jobs: {e}")
             raise
     
-    def get_job_vectors(self, job_ids: List[str]) -> List[torch.Tensor]:
+    def get_job_vectors(self, job_ids: List[str], valid_only: bool = False) -> List[torch.Tensor]:
         """
         Retrieve job embeddings for a list of job IDs.
         
         Args:
             job_ids: List of job IDs.
+            valid_only: If True, only return vectors for jobs with all required embeddings present.
             
         Returns:
             List[torch.Tensor]: List of job embedding vectors.
@@ -255,17 +256,16 @@ class DatabaseConnector:
                 v_job_title = torch.tensor(emb_doc.get("job_title_embeddings", []), dtype=torch.float)
                 v_job_skills = torch.tensor(emb_doc.get("tech_skills_vectors", []), dtype=torch.float)
                 v_soft_skills = torch.tensor(emb_doc.get("soft_skills_embeddings", []), dtype=torch.float)
+                v_experience = torch.tensor(emb_doc.get("experience_requirements_embeddings", []), dtype=torch.float)
                 
-                # Handle potentially missing experience_requirements_embeddings
-                if "experience_requirements_embeddings" in emb_doc and len(emb_doc["experience_requirements_embeddings"]) > 0:
-                    v_experience = torch.tensor(emb_doc["experience_requirements_embeddings"], dtype=torch.float)
-                else:
-                    # Fallback: use zero vector of expected dimension
-                    logger.warning(f"Missing experience_requirements_embeddings for job {job_id}. Using zero vector.")
-                    v_experience = torch.zeros(384, dtype=torch.float)
+                # If valid_only is True, skip jobs with missing or empty embeddings
+                if valid_only:
+                    if (len(v_job_title) == 0 or len(v_job_skills) == 0 or 
+                        len(v_soft_skills) == 0 or len(v_experience) == 0):
+                        logger.debug(f"Skipping job {job_id} due to missing embeddings")
+                        continue
                 
                 # Ensure each vector has correct dimensions (384) for consistent concatenation
-                # If vectors are non-empty but incorrect dimension, this would be a data quality issue
                 if len(v_job_title) > 0 and v_job_title.shape[0] != 384:
                     raise ValueError(f"Job title embedding dimension mismatch for job {job_id}: {v_job_title.shape[0]} vs expected 384")
                     
@@ -274,6 +274,9 @@ class DatabaseConnector:
                     
                 if len(v_soft_skills) > 0 and v_soft_skills.shape[0] != 384:
                     raise ValueError(f"Soft skills embedding dimension mismatch for job {job_id}: {v_soft_skills.shape[0]} vs expected 384")
+                    
+                if len(v_experience) > 0 and v_experience.shape[0] != 384:
+                    raise ValueError(f"Experience requirements embedding dimension mismatch for job {job_id}: {v_experience.shape[0]} vs expected 384")
                 
                 # If vectors are empty but required, this is a critical issue
                 if len(v_job_title) == 0:
@@ -284,6 +287,9 @@ class DatabaseConnector:
                     
                 if len(v_soft_skills) == 0:
                     raise ValueError(f"Missing required soft_skills_embeddings for job {job_id}")
+                    
+                if len(v_experience) == 0:
+                    raise ValueError(f"Missing required experience_requirements_embeddings for job {job_id}")
                 
                 # Combine into a single vector
                 v_job = torch.cat([

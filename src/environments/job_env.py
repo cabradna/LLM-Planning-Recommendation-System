@@ -461,6 +461,7 @@ class JobRecommendationEnv:
             # Create a new hybrid environment with the provided LLM
             hybrid_env = HybridEnv(
                 db_connector=self.db,
+                tensor_cache=self.tensor_cache,
                 reward_scheme=self.reward_scheme,
                 llm_model=llm_model,
                 tokenizer=tokenizer,
@@ -480,25 +481,12 @@ class JobRecommendationEnv:
             logger.info("Switching to hybrid environment with LLM")
             return hybrid_env
         
-        elif self.reward_strategy == "llm":
+        elif self.reward_strategy in ["llm", "hybrid"]:
             # Update the LLM components directly
-            if isinstance(self, LLMSimulatorEnv):
-                self.llm_model = llm_model
-                self.tokenizer = tokenizer
-                self.device = device
-                logger.info("Updated LLM components in LLMSimulatorEnv")
-            else:
-                logger.warning("Environment is configured for LLM but is not an LLMSimulatorEnv instance")
-        
-        elif self.reward_strategy == "hybrid":
-            # Update the LLM components directly
-            if isinstance(self, HybridEnv):
-                self.llm_model = llm_model
-                self.tokenizer = tokenizer
-                self.device = device
-                logger.info("Updated LLM components in HybridEnv")
-            else:
-                logger.warning("Environment is configured for hybrid but is not a HybridEnv instance")
+            self.llm_model = llm_model
+            self.tokenizer = tokenizer
+            self.device = device
+            logger.info(f"Updated LLM components in {self.__class__.__name__}")
         
         # Return self if we didn't create a new environment
         return self
