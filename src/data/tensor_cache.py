@@ -134,7 +134,7 @@ class TensorCache:
         logger.info(f"Found {len(valid_jobs)} jobs with complete embeddings")
         
         # 4. Store job IDs for later reference
-        self.original_job_ids = [str(job["original_job_id"]) for job in valid_jobs]
+        self.original_job_ids = [str(job["_id"]) for job in valid_jobs]
         
         # 5. Store job metadata
         self.job_metadata = {str(job["_id"]): job for job in valid_jobs}
