@@ -528,38 +528,41 @@ class LLMSimulatorEnv(JobRecommendationEnv):
     
     def reset(self, applicant_id: Optional[str] = None) -> torch.Tensor:
         """
-        Reset the environment with a new applicant. Loads state from cache.
-        Handles applicant profile text retrieval (if possible without DB).
+        Reset the environment with a new applicant. Loads state and text profile from cache.
         
         Args:
             applicant_id: Specific applicant ID to use.
             
         Returns:
             torch.Tensor: Initial state vector.
+            
+        Raises:
+            ValueError: If applicant state or text profile is missing from cache (via KeyError).
         """
         # Call parent reset first to get state and sample jobs from cache
         state = super().reset(applicant_id)
         
-        # --- Handle Applicant Profile Text ---
-        # The original implementation fetched text from DB. This is removed.
-        # Option 1: Assume text is not needed or LLM prompt is adapted.
-        # Option 2: Try to get text from TensorCache if it was added there (requires TensorCache modification).
-        # Option 3: Raise error if text is required but not available.
-        
-        # For now, let's clear the profile and log a warning. 
-        # The simulate_user_response will need to be robust.
-        if applicant_id in self.applicant_profiles:
-            del self.applicant_profiles[applicant_id] # Clear old profile if exists
+        # --- Get Applicant Profile Text from Cache ---
+        try:
+            # Use string representation of applicant_id for lookup
+            applicant_id_str = str(applicant_id)
+            # This will raise KeyError if the applicant was skipped during cache load
+            profile_text_data = self.tensor_cache.get_applicant_profile_text(applicant_id_str)
+            
+            # Store the successfully loaded profile text
+            self.applicant_profiles[applicant_id_str] = profile_text_data
+            logger.debug(f"Successfully loaded applicant text profile for {applicant_id_str} from cache.")
 
-        logger.warning(f"Applicant profile text for {applicant_id} cannot be fetched from DB (DB access removed). "
-                       f"LLM prompts might lack applicant details unless profile data is added to TensorCache or prompt strategy is changed.")
-        # We set a placeholder, simulate_user_response needs to be robust.
-        self.applicant_profiles[applicant_id] = {
-            "bio": "Applicant Bio (Not Available - DB Removed)",
-            "resume": "Applicant Resume (Not Available - DB Removed)"
-        }
+        except KeyError as e:
+             # Profile text not found in cache (applicant was skipped during load)
+             logger.error(f"Applicant profile text for {applicant_id_str} not found in TensorCache. Cannot proceed with LLM simulation for this applicant.")
+             # Raise an error because LLM simulation depends on the profile text
+             raise ValueError(f"Missing applicant text profile in cache for {applicant_id_str}. Cannot reset LLMSimulatorEnv.") from e
+        except Exception as e:
+             logger.error(f"Unexpected error fetching applicant profile text from cache for {applicant_id_str}: {e}", exc_info=True)
+             raise RuntimeError("Failed to reset LLMSimulatorEnv due to cache error retrieving profile text.") from e
         # ------------------------------------
-
+        
         return state
 
     def step(self, action_idx: int) -> Tuple[torch.Tensor, float, bool, Dict]:
@@ -647,14 +650,24 @@ class LLMSimulatorEnv(JobRecommendationEnv):
              # If essential details are still missing after checking cache
              raise RuntimeError(f"Essential details (title, description) missing for job {job_id_str} even after checking cache.")
              
-        # Get applicant profile (handle missing text)
-        applicant_profile = self.applicant_profiles.get(self.current_applicant_id, {
-             "bio": "Applicant Bio (Not Available)", 
-             "resume": "Applicant Resume (Not Available)"
-        })
-        
-        # Build prompt for LLM (potentially with placeholders for applicant text)
-        prompt = self._build_llm_prompt(applicant_profile, job_title, job_description)
+        # Get applicant profile from self.applicant_profiles (populated during reset)
+        applicant_id_str = str(self.current_applicant_id) # Ensure string key
+        applicant_profile = self.applicant_profiles.get(applicant_id_str)
+
+        if not applicant_profile:
+             # This should not happen if reset succeeded, but handle defensively
+             logger.error(f"Internal Error: Applicant profile for {applicant_id_str} not found in self.applicant_profiles despite successful reset.")
+             return "IGNORE" # Default response
+
+        # No need to check for _load_error anymore, as only valid profiles are stored
+
+        # Build prompt for LLM using the fetched/cached profile
+        prompt = self._build_llm_prompt(
+            applicant_bio=applicant_profile.get('bio', 'Bio unavailable.'), # Use default only if field missing in valid doc
+            applicant_resume=applicant_profile.get('resume_string', 'Resume unavailable.'), # Use default only if field missing
+            job_title=job_title,
+            job_description=job_description
+        )
         
         # Get LLM response
         response = self._get_llm_decision(prompt)
@@ -666,12 +679,13 @@ class LLMSimulatorEnv(JobRecommendationEnv):
         
         return mapped_response
     
-    def _build_llm_prompt(self, applicant_profile: Dict, job_title: str, job_description: str) -> str:
+    def _build_llm_prompt(self, applicant_bio: str, applicant_resume: str, job_title: str, job_description: str) -> str:
         """
         Build a prompt for the LLM to simulate user response.
         
         Args:
-            applicant_profile: Applicant profile information.
+            applicant_bio: Applicant bio.
+            applicant_resume: Applicant resume.
             job_title: Job title.
             job_description: Job description.
             
@@ -682,10 +696,10 @@ class LLMSimulatorEnv(JobRecommendationEnv):
 You are simulating a job seeker's response to a job recommendation.
 
 JOB SEEKER PROFILE:
-{applicant_profile['bio']}
+{applicant_bio}
 
 RESUME:
-{applicant_profile['resume']}
+{applicant_resume}
 
 JOB RECOMMENDATION:
 Title: {job_title}

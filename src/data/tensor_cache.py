@@ -36,6 +36,7 @@ class TensorCache:
         
         # Applicant data
         self.applicant_states = {}  # applicant_id -> tensor
+        self.applicant_profiles_text = {}  # applicant_id -> text profile
         
         # Job data
         self.job_vectors = None     # tensor [num_jobs, embedding_dim]
@@ -81,22 +82,85 @@ class TensorCache:
     
     def _load_applicants(self, db_connector, applicant_ids):
         """
-        Load applicant state vectors from database.
+        Load applicant state vectors and text profiles from database.
+        Skips applicants if either state vector or text profile cannot be loaded successfully.
         
         Args:
             db_connector: DatabaseConnector instance
             applicant_ids: List of applicant IDs to load
         """
-        logger.info(f"Loading {len(applicant_ids)} applicants into tensor cache")
+        logger.info(f"Attempting to load {len(applicant_ids)} applicants (state vectors and text profiles) into tensor cache...")
         
-        for applicant_id in applicant_ids:
-            # Get applicant state from database
-            applicant_state = db_connector.get_applicant_state(applicant_id)
+        candidates_text_collection = db_connector.db[db_connector.collections["candidates_text"]]
+        successfully_loaded_count = 0
+        
+        for applicant_id_obj in applicant_ids: 
+            applicant_id_str = str(applicant_id_obj)
+            applicant_state = None
+            candidate_doc = None
             
-            # Store in cache on the correct device
-            self.applicant_states[applicant_id] = applicant_state.to(self.device)
+            # --- 1. Load State Vector --- 
+            try:
+                 applicant_state = db_connector.get_applicant_state(applicant_id_obj)
+                 if applicant_state is None:
+                     # Handle case where get_applicant_state returns None without error
+                     logger.warning(f"State vector not found for applicant {applicant_id_str}. Skipping applicant.")
+                     continue
+            except Exception as e:
+                 logger.error(f"Error fetching state vector for applicant {applicant_id_str}: {e}. Skipping applicant.")
+                 continue # Skip this applicant entirely
+                 
+            # --- 2. Load Text Profile --- 
+            try:
+                # Find the text document using the _id which should match applicant_id_obj
+                candidate_doc = candidates_text_collection.find_one({"_id": applicant_id_obj})
+                
+                if candidate_doc is None:
+                    logger.warning(f"No text data found in '{db_connector.collections['candidates_text']}' for applicant ID {applicant_id_str}. Skipping applicant.")
+                    continue # Skip this applicant
+
+            except Exception as e:
+                logger.error(f"Error fetching text profile for applicant {applicant_id_str}: {e}. Skipping applicant.", exc_info=True)
+                continue # Skip this applicant
+
+            # --- 3. Format Profile and Store (only if both loaded successfully) --- 
+            # Format candidate profile for storage
+            try:
+                profile = {
+                    "bio": candidate_doc.get("bio", "Bio not available."), # Use default only if field missing, not if doc missing
+                    "skills": candidate_doc.get("skills", []), 
+                    "experience": candidate_doc.get("experience", [])
+                }
+                # Format the resume string
+                resume_parts = []
+                if profile['skills']:
+                    resume_parts.append("Skills:\n- " + ', '.join(map(str, profile['skills']))) 
+                if profile['experience']:
+                    exp_strings = []
+                    for exp in profile['experience']:
+                        title = exp.get('title', 'N/A')
+                        company = exp.get('company', 'N/A')
+                        exp_strings.append(f"- {title} at {company}")
+                    if exp_strings:
+                        resume_parts.append("\nExperience:\n" + '\n'.join(exp_strings))
+                profile['resume_string'] = '\n\n'.join(resume_parts) if resume_parts else "Resume details not available."
+                
+                # Store state vector (on device)
+                self.applicant_states[applicant_id_str] = applicant_state.to(self.device)
+                # Store formatted text profile (on CPU)
+                self.applicant_profiles_text[applicant_id_str] = profile
+                successfully_loaded_count += 1
+                
+            except Exception as e:
+                 logger.error(f"Error formatting profile or storing data for applicant {applicant_id_str} even after finding documents: {e}. Skipping applicant.", exc_info=True)
+                 # Clean up potentially partially stored data for this applicant just in case
+                 if applicant_id_str in self.applicant_states:
+                     del self.applicant_states[applicant_id_str]
+                 if applicant_id_str in self.applicant_profiles_text:
+                     del self.applicant_profiles_text[applicant_id_str]
+                 continue # Skip this applicant
             
-        logger.info(f"Loaded {len(self.applicant_states)} applicant states into cache")
+        logger.info(f"Successfully loaded state vectors and text profiles for {successfully_loaded_count} out of {len(applicant_ids)} requested applicants.")
     
     def _load_all_valid_jobs(self, db_connector):
         """
@@ -201,12 +265,33 @@ class TensorCache:
         # Get job IDs for sampled jobs
         sampled_job_ids = [self.job_text_ids[i] for i in sampled_indices]
         
+        # --- Start Debugging --- 
+        logger.debug(f"sample_jobs: Trying to sample {n} jobs.")
+        if sampled_job_ids:
+            logger.debug(f"sample_jobs: First 5 sampled job IDs (type {type(sampled_job_ids[0])}): {sampled_job_ids[:5]}")
+            first_metadata_key = next(iter(self.job_metadata)) if self.job_metadata else None
+            if first_metadata_key:
+                 logger.debug(f"sample_jobs: First metadata key (type {type(first_metadata_key)}): {first_metadata_key}")
+            else:
+                 logger.debug("sample_jobs: Metadata dictionary is empty!") # Should not happen if cache loaded jobs
+        else:
+             logger.debug("sample_jobs: No job IDs were sampled (available indices might be empty).")
+        # --- End Debugging ---
+
         # Get job documents for sampled jobs
         sampled_docs = []
         for job_id in sampled_job_ids:
-            if job_id in self.job_metadata:
+            # Convert job_id to string for metadata lookup
+            job_id_str = str(job_id)
+            metadata_found = job_id_str in self.job_metadata
+            
+            # --- Start Debugging --- 
+            logger.debug(f"  Checking job_id: {job_id} (type {type(job_id)}) -> str: \"{job_id_str}\" (type {type(job_id_str)}). Found in metadata: {metadata_found}")
+            # --- End Debugging --- 
+            
+            if metadata_found:
+                metadata = self.job_metadata[job_id_str]
                 # Create a document similar to what would be returned from the database
-                metadata = self.job_metadata[job_id]
                 doc = {
                     "_id": job_id,
                     "job_title": metadata["job_title"],
@@ -215,6 +300,14 @@ class TensorCache:
                     "soft_skills": metadata.get("soft_skills", [])
                 }
                 sampled_docs.append(doc)
+            # --- Start Debugging --- 
+            # else: # Optional: Log if not found
+            #     logger.debug(f"    Job ID string \"{job_id_str}\" not found in metadata keys.")
+            # --- End Debugging ---
+        
+        # --- Start Debugging ---
+        logger.debug(f"sample_jobs: Finished loop. Found {len(sampled_docs)} matching documents.")
+        # --- End Debugging ---
         
         return sampled_docs, sampled_vectors, sampled_job_ids
     
@@ -376,6 +469,7 @@ class TensorCache:
         
         # Clear applicant data
         self.applicant_states = {}
+        self.applicant_profiles_text = {}
         
         # Clear job data
         if self.job_vectors is not None:
@@ -407,3 +501,26 @@ class TensorCache:
             "initialization_time": self.initialization_time,
             "device": str(self.device),
         } 
+
+    def get_applicant_profile_text(self, applicant_id):
+        """
+        Get applicant text profile (bio, skills, experience) from cache.
+        Assumes profile exists if key is present, as placeholders are not stored.
+        
+        Args:
+            applicant_id: ID of the applicant (string)
+            
+        Returns:
+            Dict: Applicant text profile dictionary
+            
+        Raises:
+            KeyError: If applicant profile text not in cache (means applicant was skipped during load)
+        """
+        applicant_id_str = str(applicant_id) # Ensure string key
+        if applicant_id_str in self.applicant_profiles_text:
+            self.cache_hits += 1 # Count as cache hit
+            return self.applicant_profiles_text[applicant_id_str]
+        else:
+            self.cache_misses += 1
+            # This key error now signifies the applicant was skipped during load
+            raise KeyError(f"Applicant text profile for {applicant_id_str} not found in cache (applicant likely skipped during load due to missing state/text data).") 
