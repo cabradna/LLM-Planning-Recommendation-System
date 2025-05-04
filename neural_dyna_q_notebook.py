@@ -170,17 +170,18 @@ from config.config import (
     STRATEGY_CONFIG,
     PATH_CONFIG,
     EVAL_CONFIG,
-    HF_CONFIG
+    HF_CONFIG,
+    ENV_CONFIG
 )
 
 # Set random seeds for reproducibility
 # This ensures that the experiment produces consistent results across multiple runs,
 # which is essential for debugging and comparing different approaches.
-random.seed(TRAINING_CONFIG["random_seed"])
-np.random.seed(TRAINING_CONFIG["random_seed"])
-torch.manual_seed(TRAINING_CONFIG["random_seed"])
+random.seed(ENV_CONFIG["random_seed"])
+np.random.seed(ENV_CONFIG["random_seed"])
+torch.manual_seed(ENV_CONFIG["random_seed"])
 if torch.cuda.is_available():
-    torch.cuda.manual_seed_all(TRAINING_CONFIG["random_seed"])
+    torch.cuda.manual_seed_all(ENV_CONFIG["random_seed"])
 
 # Determine the device to use for PyTorch computations (CPU or GPU)
 # If a GPU is available, it will be used to accelerate training.
@@ -192,12 +193,13 @@ print(f"Using device: {device}")
 # such as data loading, environment interaction, model architectures, and training algorithms.
 from src.data.database import DatabaseConnector
 from src.data.data_loader import JobRecommendationDataset, ReplayBuffer
-from src.environments.job_env import JobRecommendationEnv
+from src.environments.job_env import JobRecommendationEnv, LLMSimulatorEnv, HybridEnv
 from src.models.q_network import QNetwork
 from src.models.world_model import WorldModel
 from src.training.agent import DynaQAgent
 from src.utils.visualizer import Visualizer
 from src.utils.evaluator import Evaluator
+from src.data.tensor_cache import TensorCache
 
 print("Project modules imported successfully.")
 # %% [markdown]
@@ -221,7 +223,7 @@ cosine_weight = STRATEGY_CONFIG["hybrid"]["initial_cosine_weight"]
 
 # Initialize database connector
 try:
-    db = DatabaseConnector()  # Uses default connection string and db name from config
+    db_connector = DatabaseConnector()  # Uses default connection string and db name from config
     print("Database connection established successfully.")
 except Exception as e:
     print(f"Database connection error: {e}")
@@ -241,7 +243,7 @@ except Exception as e:
 # Query the database to get a list of candidate IDs
 try:
     # Get the candidates_text collection
-    collection = db.db[db.collections["candidates_text"]]
+    collection = db_connector.db[db_connector.collections["candidates_text"]]
     
     # Query for candidate IDs (limit to 10 for demonstration)
     candidate_ids = [doc["_id"] for doc in collection.find({}, {"_id": 1}).limit(TRAINING_CONFIG["num_candidates"])]
@@ -254,16 +256,16 @@ try:
     print(f"Selected target candidate ID: {target_candidate_id}")
     
     # Get the candidate embedding directly from the database connector
-    candidate_embedding = db.get_applicant_state(target_candidate_id)
+    candidate_embedding = db_connector.get_applicant_state(target_candidate_id)
     print(f"Candidate embedding shape: {candidate_embedding.shape}")
     
     # Sample jobs from the database with embedding validation to ensure all have required fields
-    sampled_jobs = db.sample_candidate_jobs(n=TRAINING_CONFIG["num_jobs"], validate_embeddings=True)
+    sampled_jobs = db_connector.sample_candidate_jobs(n=TRAINING_CONFIG["num_jobs"], validate_embeddings=True)
     job_ids = [job["_id"] for job in sampled_jobs]
     print(f"Sampled {len(job_ids)} jobs from the database (all with valid embeddings)")
     
     # Get job vectors for the sampled jobs directly from the database connector
-    job_vectors = db.get_job_vectors(job_ids)
+    job_vectors = db_connector.get_job_vectors(job_ids)
     print(f"Fetched {len(job_vectors)} job vectors")
     
     # Convert job vectors to NumPy array for easier handling
@@ -286,7 +288,98 @@ except Exception as e:
 # Each network is configured according to the parameters specified in the configuration file.
 
 # %%
-# Initialize Q-Network
+# Create environment based on reward strategy
+print(f"Creating environment with {reward_strategy} reward strategy...")
+
+# %% [markdown]
+# ## Tensor Cache Initialization
+# 
+# Initialize the tensor cache to significantly speed up training by preloading all data from the database to GPU memory.
+
+# %%
+# Initialize tensor cache
+
+# Define cache configuration
+CACHE_CONFIG = {
+    "enabled": True,                                    # Whether to use tensor cache
+    "device": TRAINING_CONFIG.get("device", "cuda"),    # Device to store tensors on
+    "load_all_jobs": True                               # Whether to load all valid jobs
+}
+
+if CACHE_CONFIG["enabled"]:
+    print(f"Initializing tensor cache on {CACHE_CONFIG['device']}...")
+    
+    # Create tensor cache
+    tensor_cache = TensorCache(device=CACHE_CONFIG["device"])
+    
+    # Load all data from database to cache
+    tensor_cache.copy_from_database(
+        db_connector=db_connector,
+        applicant_ids=[target_candidate_id]
+    )
+    
+    # Print cache statistics
+    stats = tensor_cache.cache_stats()
+    print(f"Cache initialized with {stats['job_count']} jobs")
+    print(f"Initialization time: {stats['initialization_time']:.2f} seconds")
+    print(f"Memory device: {stats['device']}")
+    
+    # Create environment with cache
+    if reward_strategy == "cosine":
+        env = JobRecommendationEnv(
+            db_connector=db_connector,
+            tensor_cache=tensor_cache,
+            reward_strategy="cosine",
+            random_seed=ENV_CONFIG["random_seed"]
+        )
+    elif reward_strategy == "llm":
+        env = LLMSimulatorEnv(
+            db_connector=db_connector,
+            tensor_cache=tensor_cache,
+            reward_scheme=STRATEGY_CONFIG["llm"]["response_mapping"],
+            random_seed=ENV_CONFIG["random_seed"]
+        )
+    elif reward_strategy == "hybrid":
+        env = HybridEnv(
+            db_connector=db_connector,
+            tensor_cache=tensor_cache,
+            reward_scheme=STRATEGY_CONFIG["llm"]["response_mapping"],
+            cosine_weight=STRATEGY_CONFIG["hybrid"]["cosine_weight_start"],
+            random_seed=ENV_CONFIG["random_seed"]
+        )
+    else:
+        raise ValueError(f"Unknown reward strategy: {reward_strategy}")
+    
+    print(f"Created {reward_strategy} environment with tensor cache")
+else:
+    # Create environment without cache
+    tensor_cache = None
+    if reward_strategy == "cosine":
+        env = JobRecommendationEnv(
+            db_connector=db_connector,
+            reward_strategy="cosine",
+            random_seed=ENV_CONFIG["random_seed"]
+        )
+    elif reward_strategy == "llm":
+        env = LLMSimulatorEnv(
+            db_connector=db_connector,
+            reward_scheme=STRATEGY_CONFIG["llm"]["response_mapping"],
+            random_seed=ENV_CONFIG["random_seed"]
+        )
+    elif reward_strategy == "hybrid":
+        env = HybridEnv(
+            db_connector=db_connector,
+            reward_scheme=STRATEGY_CONFIG["llm"]["response_mapping"],
+            cosine_weight=STRATEGY_CONFIG["hybrid"]["cosine_weight_start"],
+            random_seed=ENV_CONFIG["random_seed"]
+        )
+    else:
+        raise ValueError(f"Unknown reward strategy: {reward_strategy}")
+    
+    print(f"Created {reward_strategy} environment without tensor cache")
+
+# %%
+# Initialize Q-network
 q_network = QNetwork(
     state_dim=MODEL_CONFIG["q_network"]["state_dim"],
     action_dim=MODEL_CONFIG["q_network"]["action_dim"],
@@ -319,13 +412,6 @@ visualizer = Visualizer()
 
 # Initialize Evaluator
 evaluator = Evaluator()
-
-# Initialize environment with required parameters
-env = JobRecommendationEnv(
-    db_connector=db,
-    reward_strategy=reward_strategy,
-    random_seed=TRAINING_CONFIG["random_seed"]
-)
 
 # Set the target candidate ID for the environment
 env.reset(applicant_id=target_candidate_id)
@@ -763,7 +849,7 @@ for i, (job_id, score) in enumerate(zip(recommended_jobs, recommendation_scores)
     
     # Retrieve and display job details
     try:
-        job_details = db.get_job_details(job_id)
+        job_details = db_connector.get_job_details(job_id)
         print(f"Title: {job_details.get('job_title', 'N/A')}")
         
         # Display truncated description
@@ -805,6 +891,6 @@ for i, (job_id, score) in enumerate(zip(recommended_jobs, recommendation_scores)
 
 # %%
 # Clean up resources
-db.close()
+db_connector.close()
 print("Database connection closed.")
 print("Notebook execution complete.")

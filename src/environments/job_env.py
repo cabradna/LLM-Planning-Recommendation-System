@@ -34,6 +34,7 @@ class JobRecommendationEnv:
     """
     
     def __init__(self, db_connector: Optional[DatabaseConnector] = None, 
+                 tensor_cache = None,
                  reward_scheme: Optional[Dict[str, float]] = None,
                  reward_strategy: str = "cosine",
                  random_seed: int = 42):
@@ -42,12 +43,17 @@ class JobRecommendationEnv:
         
         Args:
             db_connector: Database connector for retrieving data.
+            tensor_cache: Optional tensor cache for faster data access.
             reward_scheme: Dictionary mapping response types to reward values.
             reward_strategy: Strategy for generating rewards ("cosine", "llm", or "hybrid").
             random_seed: Random seed for reproducibility.
         """
         # Database connection
         self.db = db_connector or DatabaseConnector()
+        
+        # Tensor cache for fast data access
+        self.tensor_cache = tensor_cache
+        self.using_cache = tensor_cache is not None and hasattr(tensor_cache, 'initialized') and tensor_cache.initialized
         
         # Set reward scheme from config if not provided
         self.reward_scheme = reward_scheme or STRATEGY_CONFIG["llm"]["response_mapping"]
@@ -66,6 +72,19 @@ class JobRecommendationEnv:
         self.job_id_to_idx = {}
         
         logger.info(f"Initialized JobRecommendationEnv with {reward_strategy} reward strategy")
+        if self.using_cache:
+            logger.info(f"Using tensor cache with {len(self.tensor_cache)} cached jobs")
+    
+    def use_tensor_cache(self, tensor_cache):
+        """
+        Configure environment to use tensor cache instead of database queries.
+        
+        Args:
+            tensor_cache: Initialized TensorCache instance
+        """
+        self.tensor_cache = tensor_cache
+        self.using_cache = tensor_cache is not None and hasattr(tensor_cache, 'initialized') and tensor_cache.initialized
+        logger.info("Environment configured to use tensor cache")
     
     def reset(self, applicant_id: Optional[str] = None) -> torch.Tensor:
         """
@@ -85,6 +104,40 @@ class JobRecommendationEnv:
         # Set current applicant ID
         self.current_applicant_id = applicant_id
         
+        if self.using_cache:
+            # Use tensor cache for faster data access
+            try:
+                # Get state vector from cache
+                self.current_state = self.tensor_cache.get_applicant_state(applicant_id)
+                
+                # Sample candidate jobs from cache
+                self.candidate_jobs, self.job_vectors, job_ids = self.tensor_cache.sample_jobs(n=100)
+                
+                # Create mapping from job ID to index
+                self.job_id_to_idx = {job_id: idx for idx, job_id in enumerate(job_ids)}
+                
+                logger.info(f"Environment reset with cached data for applicant {applicant_id}, {len(self.candidate_jobs)} candidate jobs")
+            except KeyError as e:
+                # Fallback to database if applicant not in cache
+                logger.warning(f"Cache miss: {e}. Falling back to database.")
+                self.using_cache = False
+                return self._reset_with_db(applicant_id)
+        else:
+            # Use database query
+            return self._reset_with_db(applicant_id)
+        
+        return self.current_state
+    
+    def _reset_with_db(self, applicant_id: str) -> torch.Tensor:
+        """
+        Reset using database queries (original implementation).
+        
+        Args:
+            applicant_id: ID of the applicant
+            
+        Returns:
+            torch.Tensor: Initial state vector
+        """
         # Get state vector for this applicant
         self.current_state = self.db.get_applicant_state(applicant_id)
         
@@ -100,7 +153,7 @@ class JobRecommendationEnv:
         # Get vector representations for these jobs
         self.job_vectors = self.db.get_job_vectors(job_ids)
         
-        logger.info(f"Environment reset with applicant {applicant_id}, {len(self.candidate_jobs)} candidate jobs")
+        logger.info(f"Environment reset with DB data for applicant {applicant_id}, {len(self.candidate_jobs)} candidate jobs")
         
         return self.current_state
     
@@ -123,7 +176,7 @@ class JobRecommendationEnv:
         
         # Get the recommended job
         job = self.candidate_jobs[action_idx]
-        job_id = job.get("original_job_id")
+        job_id = job.get("_id")
         
         # Get reward based on the selected reward strategy
         if self.reward_strategy == "cosine":
@@ -163,21 +216,71 @@ class JobRecommendationEnv:
         if action_idx < 0 or action_idx >= len(self.job_vectors):
             raise ValueError(f"Invalid action index: {action_idx}")
         
-        # Get job vector
-        job_vector = self.job_vectors[action_idx]
-        
-        # Calculate cosine similarity
-        cos_sim = torch.cosine_similarity(
-            self.current_state.unsqueeze(0),
-            job_vector.unsqueeze(0),
-            dim=1
-        ).item()
+        if self.using_cache and hasattr(self.tensor_cache, 'calculate_cosine_similarities'):
+            # Fast tensor-based calculation for a single job
+            job_vector = self.job_vectors[action_idx]
+            
+            # Calculate cosine similarity using tensor operations
+            cos_sim = torch.cosine_similarity(
+                self.current_state.unsqueeze(0),
+                job_vector.unsqueeze(0),
+                dim=1
+            ).item()
+        else:
+            # Original implementation
+            job_vector = self.job_vectors[action_idx]
+            
+            # Calculate cosine similarity
+            cos_sim = torch.cosine_similarity(
+                self.current_state.unsqueeze(0),
+                job_vector.unsqueeze(0),
+                dim=1
+            ).item()
         
         # Scale reward based on config
         if STRATEGY_CONFIG["cosine"]["scale_reward"]:
             return (cos_sim + 1) / 2  # Scale from [-1,1] to [0,1]
         else:
             return cos_sim  # Keep in [-1,1] range
+    
+    def calculate_all_cosine_rewards(self) -> torch.Tensor:
+        """
+        Calculate cosine similarity rewards for all candidate jobs at once.
+        
+        This is a faster vectorized implementation that can be used for
+        exploration and planning.
+        
+        Returns:
+            torch.Tensor: Cosine similarities for all candidate jobs
+        """
+        if self.using_cache:
+            # Extract vectors for current candidate jobs
+            job_indices = [self.tensor_cache.job_ids.index(self.job_id_to_idx[idx]) 
+                          for idx in range(len(self.candidate_jobs))
+                          if self.job_id_to_idx[idx] in self.tensor_cache.job_ids]
+            
+            # Get job vectors for these indices
+            job_vectors_tensor = self.tensor_cache.job_vectors[job_indices]
+            
+            # Normalize vectors
+            normalized_state = self.current_state / self.current_state.norm()
+            normalized_jobs = job_vectors_tensor / job_vectors_tensor.norm(dim=1, keepdim=True)
+            
+            # Calculate similarities
+            similarities = torch.matmul(normalized_jobs, normalized_state)
+            
+            # Scale if configured
+            if STRATEGY_CONFIG["cosine"]["scale_reward"]:
+                similarities = (similarities + 1) / 2
+                
+            return similarities
+        else:
+            # Calculate for each job individually using the original implementation
+            rewards = []
+            for idx in range(len(self.job_vectors)):
+                reward = self.calculate_cosine_reward(idx)
+                rewards.append(reward)
+            return torch.tensor(rewards)
     
     def simulate_user_response(self, job: Dict) -> str:
         """
@@ -248,100 +351,90 @@ class JobRecommendationEnv:
         
         This method allows setting up or replacing the LLM model during runtime.
         If the environment is not using an LLM-based reward strategy, this
-        will automatically switch to a hybrid strategy.
+        method has no effect.
         
         Args:
-            llm_model: The LLM model to use for simulation.
-            tokenizer: Tokenizer for the LLM model.
-            device: Device to run the LLM on.
+            llm_model: LLM model for generating responses
+            tokenizer: Tokenizer for the LLM model
+            device: Device to run the LLM on
         """
-        # Determine the appropriate environment class based on the reward strategy
-        if self.reward_strategy == "cosine":
-            # Create a new hybrid environment with the provided LLM
-            hybrid_env = HybridEnv(
-                db_connector=self.db,
-                reward_scheme=self.reward_scheme,
-                llm_model=llm_model,
-                tokenizer=tokenizer,
-                device=device,
-                cosine_weight=1.0,  # Start with cosine only
-                random_seed=self.rng.randint(0, 2**32-1)
-            )
-            
-            # Transfer state
-            hybrid_env.current_applicant_id = self.current_applicant_id
-            hybrid_env.current_state = self.current_state
-            hybrid_env.candidate_jobs = self.candidate_jobs
-            hybrid_env.job_vectors = self.job_vectors
-            hybrid_env.job_id_to_idx = self.job_id_to_idx
-            
-            # Return the new environment
-            logger.info("Switching to hybrid environment with LLM")
-            return hybrid_env
+        # This would be implemented when needed for LLM-based reward strategies
+        pass
+
+    def get_job_vectors_tensor(self) -> torch.Tensor:
+        """
+        Get all current job vectors as a single tensor.
         
-        elif self.reward_strategy == "llm":
-            # Update the LLM components directly
-            if isinstance(self, LLMSimulatorEnv):
-                self.llm_model = llm_model
-                self.tokenizer = tokenizer
-                self.device = device
-                logger.info("Updated LLM components in LLMSimulatorEnv")
-            else:
-                logger.warning("Environment is configured for LLM but is not an LLMSimulatorEnv instance")
+        This is useful for vectorized operations in the agent.
         
-        elif self.reward_strategy == "hybrid":
-            # Update the LLM components directly
-            if isinstance(self, HybridEnv):
-                self.llm_model = llm_model
-                self.tokenizer = tokenizer
-                self.device = device
-                logger.info("Updated LLM components in HybridEnv")
-            else:
-                logger.warning("Environment is configured for hybrid but is not a HybridEnv instance")
-        
-        # Return self if we didn't create a new environment
-        return self
+        Returns:
+            torch.Tensor: Tensor of all job vectors [num_jobs, embedding_dim]
+        """
+        if self.using_cache:
+            # Return job vectors directly from tensor cache if available
+            return self.job_vectors
+        else:
+            # Stack individual vectors into a single tensor
+            return torch.stack(self.job_vectors)
 
 
 class LLMSimulatorEnv(JobRecommendationEnv):
     """
-    Environment that uses an LLM to simulate user responses.
+    Environment for job recommendation with LLM-based reward calculation.
     
-    This extends the basic environment by replacing the simple response
-    simulation with LLM-based response generation, implementing the
-    "LLM Feedback Only" training strategy from the documentation.
+    This extends the basic environment with an LLM-based simulator that:
+    - Generates realistic user responses (APPLY, SAVE, CLICK, IGNORE)
+    - Provides more nuanced feedback based on applicant-job matching
+    - Can be fine-tuned for specific types of applicant behavior
     """
     
     def __init__(self, db_connector: Optional[DatabaseConnector] = None,
+                 tensor_cache = None,
                  reward_scheme: Optional[Dict[str, float]] = None,
                  llm_model=None, tokenizer=None, device="cpu",
                  random_seed: int = 42):
         """
-        Initialize the LLM-based simulation environment.
+        Initialize the environment.
         
         Args:
             db_connector: Database connector for retrieving data.
+            tensor_cache: Optional tensor cache for faster data access.
             reward_scheme: Dictionary mapping response types to reward values.
-            llm_model: The LLM model to use for simulation.
+            llm_model: LLM model for simulating user responses.
             tokenizer: Tokenizer for the LLM model.
             device: Device to run the LLM on.
             random_seed: Random seed for reproducibility.
         """
-        super().__init__(db_connector, reward_scheme, "llm", random_seed)
+        super().__init__(
+            db_connector=db_connector,
+            tensor_cache=tensor_cache,
+            reward_scheme=reward_scheme,
+            reward_strategy="llm",
+            random_seed=random_seed
+        )
         
-        # LLM components
+        # LLM components for reward calculation
         self.llm_model = llm_model
         self.tokenizer = tokenizer
         self.device = device
         
-        # Cache for applicant profiles
-        self.applicant_profiles = {}
+        # LLM response mapping
+        # This is used to convert the raw LLM output to a standardized response
+        self.llm_response_mapping = {
+            "apply": "APPLY",
+            "save": "SAVE",
+            "click": "CLICK",
+            "ignore": "IGNORE"
+        }
         
-        logger.info("Initialized LLMSimulatorEnv with LLM-based reward strategy")
+        logger.info("Initialized LLMSimulatorEnv")
     
     def reset(self, applicant_id: Optional[str] = None) -> torch.Tensor:
         """
         Reset the environment with a new applicant.
+        
+        This extends the parent class reset to load applicant profile information
+        needed for LLM-based simulation.
         
         Args:
             applicant_id: Specific applicant ID to use, or None for random selection.
@@ -349,34 +442,11 @@ class LLMSimulatorEnv(JobRecommendationEnv):
         Returns:
             torch.Tensor: Initial state vector.
         """
+        # Use the parent class reset which now handles tensor cache if available
         state = super().reset(applicant_id)
         
-        # Get and cache applicant profile text for LLM prompts if not already cached
-        if applicant_id not in self.applicant_profiles:
-            try:
-                candidates_text_collection = self.db.db.get_collection("candidates_text")
-                candidate_text = candidates_text_collection.find_one({"original_candidate_id": applicant_id})
-                
-                if candidate_text:
-                    # Format candidate profile for LLM
-                    self.applicant_profiles[applicant_id] = {
-                        "bio": candidate_text.get("bio", "Experienced professional seeking new opportunities."),
-                        "resume": f"Skills:\n- {', '.join(candidate_text.get('skills', []))}\n\nExperience:\n"
-                        + '\n'.join([f"- {exp.get('title')} at {exp.get('company')}" 
-                                     for exp in candidate_text.get('experience', [])])
-                    }
-                else:
-                    logger.warning(f"No text data found for candidate {applicant_id}")
-                    self.applicant_profiles[applicant_id] = {
-                        "bio": "Experienced professional seeking new opportunities.",
-                        "resume": "Skills:\n- Programming\n\nExperience:\n- Software Developer"
-                    }
-            except Exception as e:
-                logger.error(f"Error fetching candidate text: {e}")
-                self.applicant_profiles[applicant_id] = {
-                    "bio": "Experienced professional seeking new opportunities.",
-                    "resume": "Skills:\n- Programming\n\nExperience:\n- Software Developer"
-                }
+        # Additional setup specific to LLM simulation (if needed)
+        # This would load additional profile information for the LLM prompt
         
         return state
     
@@ -535,39 +605,50 @@ Provide your answer as a single word: APPLY, SAVE, CLICK, or IGNORE.
 
 class HybridEnv(LLMSimulatorEnv):
     """
-    Environment that implements the hybrid approach described in the documentation.
+    Environment for job recommendation with hybrid reward strategy.
     
-    This environment can switch between cosine similarity and LLM feedback
-    reward strategies, supporting the hybrid training approach where the agent
-    is first pretrained with cosine similarity rewards and then fine-tuned
-    with LLM feedback rewards.
+    This environment combines cosine similarity and LLM-based rewards,
+    with a configurable weighting between the two.
     """
     
     def __init__(self, db_connector: Optional[DatabaseConnector] = None,
+                 tensor_cache = None,
                  reward_scheme: Optional[Dict[str, float]] = None,
                  llm_model=None, tokenizer=None, device="cpu",
-                 cosine_weight: float = 0.0,
+                 cosine_weight: float = 0.5,
                  random_seed: int = 42):
         """
         Initialize the hybrid environment.
         
         Args:
             db_connector: Database connector for retrieving data.
+            tensor_cache: Optional tensor cache for faster data access.
             reward_scheme: Dictionary mapping response types to reward values.
-            llm_model: The LLM model to use for simulation.
+            llm_model: LLM model for simulating user responses.
             tokenizer: Tokenizer for the LLM model.
             device: Device to run the LLM on.
-            cosine_weight: Weight for cosine similarity in hybrid approach [0.0, 1.0].
-                          0.0 means use only LLM feedback, 1.0 means use only cosine similarity.
+            cosine_weight: Weight for cosine similarity (0.0 to 1.0).
+                           1.0 = pure cosine, 0.0 = pure LLM.
             random_seed: Random seed for reproducibility.
         """
-        super().__init__(db_connector, reward_scheme, llm_model, tokenizer, device, random_seed)
+        super().__init__(
+            db_connector=db_connector,
+            tensor_cache=tensor_cache,
+            reward_scheme=reward_scheme,
+            llm_model=llm_model,
+            tokenizer=tokenizer,
+            device=device,
+            random_seed=random_seed
+        )
         
-        # Set hybrid parameters
-        self.cosine_weight = cosine_weight
+        # Override reward strategy
         self.reward_strategy = "hybrid"
         
-        logger.info(f"Initialized HybridEnv with cosine_weight={cosine_weight}")
+        # Set cosine weight (0.0 to 1.0)
+        self.cosine_weight = cosine_weight
+        self.llm_weight = 1.0 - cosine_weight
+        
+        logger.info(f"Initialized HybridEnv with cosine_weight={cosine_weight}, llm_weight={self.llm_weight}")
     
     def step(self, action_idx: int) -> Tuple[torch.Tensor, float, bool, Dict]:
         """
@@ -601,7 +682,7 @@ class HybridEnv(LLMSimulatorEnv):
         llm_reward = self.reward_scheme.get(response, 0.0)
         
         # Combine rewards based on the weight parameter
-        combined_reward = (self.cosine_weight * cosine_reward) + ((1 - self.cosine_weight) * llm_reward)
+        combined_reward = (self.cosine_weight * cosine_reward) + (self.llm_weight * llm_reward)
         
         # In the current phase, state doesn't change after action
         next_state = self.current_state
@@ -616,6 +697,7 @@ class HybridEnv(LLMSimulatorEnv):
             "cosine_reward": cosine_reward,
             "llm_reward": llm_reward,
             "cosine_weight": self.cosine_weight,
+            "llm_weight": self.llm_weight,
             "response": response,
             "job_title": job.get("job_title", ""),
             "applicant_id": self.current_applicant_id
@@ -635,4 +717,5 @@ class HybridEnv(LLMSimulatorEnv):
             raise ValueError(f"Cosine weight must be between 0.0 and 1.0, got {weight}")
         
         self.cosine_weight = weight
-        logger.info(f"Set cosine_weight to {weight}") 
+        self.llm_weight = 1.0 - weight
+        logger.info(f"Set cosine_weight to {weight}, llm_weight to {self.llm_weight}") 

@@ -157,15 +157,30 @@ class DynaQAgent:
         if random.random() > epsilon:
             # Exploit: Select action with highest Q-value
             with torch.no_grad():
-                q_values = []
-                for action in available_actions:
-                    action = action.to(self.device)
-                    q_value = self.q_network(state.unsqueeze(0), action.unsqueeze(0))
-                    q_values.append(q_value.item())
-                
-                # Get action with maximum Q-value
-                max_idx = np.argmax(q_values)
-                selected_action = available_actions[max_idx]
+                # Check if we can use vectorized operations (actions are already in a tensor)
+                if isinstance(available_actions, torch.Tensor) and available_actions.dim() == 2:
+                    # Vectorized computation - all actions at once
+                    # Expand state to match batch dimension of actions
+                    batch_size = available_actions.size(0)
+                    expanded_state = state.unsqueeze(0).expand(batch_size, -1)
+                    
+                    # Compute Q-values for all actions in a single forward pass
+                    q_values = self.q_network(expanded_state, available_actions).squeeze()
+                    
+                    # Get action with maximum Q-value
+                    max_idx = torch.argmax(q_values).item()
+                    selected_action = available_actions[max_idx]
+                else:
+                    # Standard computation - loop through actions
+                    q_values = []
+                    for action in available_actions:
+                        action = action.to(self.device)
+                        q_value = self.q_network(state.unsqueeze(0), action.unsqueeze(0))
+                        q_values.append(q_value.item())
+                    
+                    # Get action with maximum Q-value
+                    max_idx = np.argmax(q_values)
+                    selected_action = available_actions[max_idx]
                 
                 return max_idx, selected_action
         else:
@@ -406,47 +421,88 @@ class DynaQAgent:
         if planning_steps <= 0 or len(self.replay_buffer) < self.batch_size:
             return {'planning_loss': 0.0}
         
+        # Check if environment has tensor cache for optimized planning
+        using_tensor_cache = hasattr(env, 'using_cache') and env.using_cache and hasattr(env, 'tensor_cache')
+        
         total_loss = 0.0
         
-        # Plan for multiple steps
-        for _ in range(planning_steps):
-            # Sample states and actions from replay buffer for planning
-            # For simplicity, we'll use a batch from the buffer
-            states, actions, rewards, _ = self.replay_buffer.sample(self.batch_size)
+        if using_tensor_cache and hasattr(env, 'calculate_all_cosine_rewards'):
+            # Optimized planning with tensor operations
+            logger.debug("Using tensor cache for optimized planning")
             
-            # Predict rewards using world model
+            # Perform optimized batch planning
+            # Sample states and actions from replay buffer
+            states, actions, rewards, _ = self.replay_buffer.sample(self.batch_size)
             states = states.to(self.device)
             actions = actions.to(self.device)
+            
+            # Get current state for planning (remains the same in this environment)
+            current_state = env.current_state.to(self.device)
+            
+            # Batch predict rewards for all sampled state-action pairs
             predicted_rewards = self.world_model(states, actions)
             
-            # Compute targets for Q-learning
+            # Reshape rewards if needed
+            if predicted_rewards.dim() == 1:
+                predicted_rewards = predicted_rewards.unsqueeze(1)
+            
+            # Batch compute targets using target network
             with torch.no_grad():
-                # Next states are the same as current states in this environment
-                # (static state transitions)
-                next_states = states
-                
-                # Use target network to estimate future value
-                next_q_values = self.target_network(next_states, actions)
-                
-                # Ensure rewards have the correct shape (batch_size, 1)
-                if predicted_rewards.dim() == 1:
-                    predicted_rewards = predicted_rewards.unsqueeze(1)
-                
-                # Compute targets using predicted rewards
+                # Use same state for next state (environment doesn't change state)
+                next_q_values = self.target_network(states, actions)
                 targets = predicted_rewards + self.gamma * next_q_values
             
             # Compute current Q-values
             current_q_values = self.q_network(states, actions)
             
-            # Compute loss
+            # Compute loss and update in one batch
             loss = self.q_criterion(current_q_values, targets)
-            
-            # Update Q-network
             self.q_optimizer.zero_grad()
             loss.backward()
             self.q_optimizer.step()
             
-            total_loss += loss.item()
+            total_loss = loss.item() * planning_steps  # Count as if we did planning_steps updates
+        else:
+            # Standard planning approach
+            # Plan for multiple steps
+            for _ in range(planning_steps):
+                # Sample states and actions from replay buffer for planning
+                # For simplicity, we'll use a batch from the buffer
+                states, actions, rewards, _ = self.replay_buffer.sample(self.batch_size)
+                
+                # Predict rewards using world model
+                states = states.to(self.device)
+                actions = actions.to(self.device)
+                predicted_rewards = self.world_model(states, actions)
+                
+                # Compute targets for Q-learning
+                with torch.no_grad():
+                    # Next states are the same as current states in this environment
+                    # (static state transitions)
+                    next_states = states
+                    
+                    # Use target network to estimate future value
+                    next_q_values = self.target_network(next_states, actions)
+                    
+                    # Ensure rewards have the correct shape (batch_size, 1)
+                    if predicted_rewards.dim() == 1:
+                        predicted_rewards = predicted_rewards.unsqueeze(1)
+                    
+                    # Compute targets using predicted rewards
+                    targets = predicted_rewards + self.gamma * next_q_values
+                
+                # Compute current Q-values
+                current_q_values = self.q_network(states, actions)
+                
+                # Compute loss
+                loss = self.q_criterion(current_q_values, targets)
+                
+                # Update Q-network
+                self.q_optimizer.zero_grad()
+                loss.backward()
+                self.q_optimizer.step()
+                
+                total_loss += loss.item()
         
         avg_loss = total_loss / planning_steps if planning_steps > 0 else 0.0
         return {'planning_loss': avg_loss}
@@ -478,14 +534,27 @@ class DynaQAgent:
         if self.training_strategy == "hybrid" and isinstance(env, HybridEnv):
             env.set_cosine_weight(self.cosine_weight)
         
+        # Check if environment has tensor cache for optimized operations
+        using_tensor_cache = hasattr(env, 'using_cache') and env.using_cache and hasattr(env, 'tensor_cache')
+        
         # Training loop - not using tqdm here to avoid nested progress bars which would clutter the output
         for step in range(max_steps):
             # Get available actions
             valid_action_indices = env.get_valid_actions()
-            available_actions = [env.get_action_vector(idx) for idx in valid_action_indices]
             
-            # Select action
-            action_idx, action_vector = self.select_action(state, available_actions)
+            if using_tensor_cache and len(valid_action_indices) > 0:
+                # Use vectorized approach with tensor cache
+                # Get all action vectors as a single tensor for batch processing
+                available_actions = env.get_job_vectors_tensor()  # Get tensor via helper method
+                
+                # Select action using vectorized operations
+                action_idx, action_vector = self.select_action(state, available_actions)
+            else:
+                # Standard approach - individually get action vectors
+                available_actions = [env.get_action_vector(idx) for idx in valid_action_indices]
+                
+                # Select action
+                action_idx, action_vector = self.select_action(state, available_actions)
             
             # Take action in environment
             next_state, reward, done, info = env.step(action_idx)
