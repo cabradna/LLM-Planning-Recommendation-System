@@ -175,9 +175,9 @@ class TensorCache:
                 emb = emb_by_id[job_id]
                 
                 # Get embedding components
-                job_title_emb = torch.tensor(emb.get("job_title_embeddings", []), dtype=torch.float32)
-                tech_skills_emb = torch.tensor(emb.get("tech_skills_vectors", []), dtype=torch.float32)
-                soft_skills_emb = torch.tensor(emb.get("soft_skills_embeddings", []), dtype=torch.float32)
+                job_title_emb = torch.tensor(emb.get("job_title_embeddings", []), dtype=torch.float32).to(self.device)
+                tech_skills_emb = torch.tensor(emb.get("tech_skills_vectors", []), dtype=torch.float32).to(self.device)
+                soft_skills_emb = torch.tensor(emb.get("soft_skills_embeddings", []), dtype=torch.float32).to(self.device)
                 
                 # Concatenate embeddings in the correct order to match applicant vectors
                 # Applicant vectors are [hard_skills, soft_skills]
@@ -189,7 +189,7 @@ class TensorCache:
 
                 # Add experience requirements embedding (handle if missing)
                 if "experience_requirements_embeddings" in emb and len(emb.get("experience_requirements_embeddings", [])) > 0:
-                    exp_requirements_emb = torch.tensor(emb.get("experience_requirements_embeddings", []), dtype=torch.float32)
+                    exp_requirements_emb = torch.tensor(emb.get("experience_requirements_embeddings", []), dtype=torch.float32).to(self.device)
                 else:
                     # Fallback: use zero vector of expected dimension
                     logger.warning(f"Missing experience_requirements_embeddings for job {job_id}. Using zero vector.")
@@ -204,7 +204,7 @@ class TensorCache:
                 ])
                 
                 # Store in the tensor
-                self.job_vectors[idx] = combined_vector.to(self.device)
+                self.job_vectors[idx] = combined_vector
         
         logger.info(f"Created job vectors tensor with shape {self.job_vectors.shape}")
     
