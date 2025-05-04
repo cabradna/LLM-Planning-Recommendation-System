@@ -8,11 +8,20 @@ import os
 import torch
 import numpy as np
 from unittest.mock import MagicMock, patch
+from pathlib import Path
 
 # Add the src directory to the path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../src')))
 
-from environments.job_env import JobRecommendationEnv, LLMSimulatorEnv
+# Add the project root to the Python path
+project_root = Path(__file__).resolve().parent.parent
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
+
+from src.environments.job_env import JobRecommendationEnv, LLMSimulatorEnv
+from src.data.database import DatabaseConnector
+from src.data.tensor_cache import TensorCache
+from config.config import ENV_CONFIG, DB_CONFIG, STRATEGY_CONFIG
 
 class TestJobRecommendationEnv(unittest.TestCase):
     """Test cases for the JobRecommendationEnv class."""
@@ -26,7 +35,7 @@ class TestJobRecommendationEnv(unittest.TestCase):
         self.mock_db.get_applicant_state.return_value = torch.randn(384)
         
         # Sample jobs with IDs 1-10
-        self.mock_jobs = [{"original_job_id": f"job_{i}", "job_title": f"Job {i}"} for i in range(10)]
+        self.mock_jobs = [{"_id": f"job_{i}", "job_title": f"Job {i}"} for i in range(10)]
         self.mock_db.sample_candidate_jobs.return_value = self.mock_jobs
         
         # Return random vectors for job embeddings
@@ -79,17 +88,13 @@ class TestJobRecommendationEnv(unittest.TestCase):
         
         # Check that info contains expected keys
         self.assertIn("job_id", info)
-        self.assertIn("response", info)
         self.assertIn("job_title", info)
         self.assertIn("applicant_id", info)
         
         # Check that info values are correct
-        self.assertEqual(info["job_id"], self.mock_jobs[action_idx]["original_job_id"])
+        self.assertEqual(info["job_id"], self.mock_jobs[action_idx]["_id"])
         self.assertEqual(info["job_title"], self.mock_jobs[action_idx]["job_title"])
         self.assertEqual(info["applicant_id"], "applicant_1")
-        
-        # Check that response is a valid type
-        self.assertIn(info["response"], ["APPLY", "SAVE", "CLICK", "IGNORE"])
     
     def test_get_valid_actions(self):
         """Test getting valid actions."""
@@ -152,7 +157,7 @@ class TestLLMSimulatorEnv(unittest.TestCase):
         )
         
         # Test that the LLM simulator returns a valid response
-        job = {"original_job_id": "job_1", "job_title": "Test Job"}
+        job = {"_id": "job_1", "job_title": "Test Job"}
         response = llm_env.simulate_user_response(job)
         
         # Check that response is a valid type

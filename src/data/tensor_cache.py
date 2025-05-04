@@ -178,8 +178,29 @@ class TensorCache:
                 tech_skills_emb = torch.tensor(emb.get("tech_skills_vectors", []), dtype=torch.float32)
                 soft_skills_emb = torch.tensor(emb.get("soft_skills_embeddings", []), dtype=torch.float32)
                 
-                # Concatenate embeddings
-                combined_vector = torch.cat([job_title_emb, tech_skills_emb, soft_skills_emb])
+                # Concatenate embeddings in the correct order to match applicant vectors
+                # Applicant vectors are [hard_skills, soft_skills]
+                combined_vector = torch.cat([
+                    tech_skills_emb,  # Tech/hard skills - matches applicant hard_skills_embedding
+                    soft_skills_emb,  # Soft skills - matches applicant soft_skills_embedding
+                    job_title_emb     # Job title - extra info not in applicant vector
+                ])
+
+                # Add experience requirements embedding (handle if missing)
+                if "experience_requirements_embeddings" in emb and len(emb.get("experience_requirements_embeddings", [])) > 0:
+                    exp_requirements_emb = torch.tensor(emb.get("experience_requirements_embeddings", []), dtype=torch.float32)
+                else:
+                    # Fallback: use zero vector of expected dimension
+                    logger.warning(f"Missing experience_requirements_embeddings for job {job_id}. Using zero vector.")
+                    exp_requirements_emb = torch.zeros(384, dtype=torch.float32, device=self.device)
+                
+                # Concatenate all four components in same order as database.py
+                combined_vector = torch.cat([
+                    tech_skills_emb,      # Tech/hard skills - matches applicant hard_skills_embedding
+                    soft_skills_emb,      # Soft skills - matches applicant soft_skills_embedding
+                    job_title_emb,        # Job title - extra info not in applicant vector
+                    exp_requirements_emb  # Experience - extra info not in applicant vector
+                ])
                 
                 # Store in the tensor
                 self.job_vectors[idx] = combined_vector.to(self.device)

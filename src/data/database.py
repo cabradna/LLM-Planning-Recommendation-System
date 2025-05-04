@@ -297,6 +297,18 @@ class DatabaseConnector:
                 if v_job.shape[0] != 384 * 4:  # 4 embeddings of 384 dimensions each
                     raise ValueError(f"Invalid final job vector dimension: got {v_job.shape[0]}, expected {384 * 4}")
                 
+                # Combine into a single vector with tech and soft skills first to match applicant vector order
+                v_job = torch.cat([
+                    v_job_skills,     # Tech/hard skills - matches applicant hard_skills_embedding
+                    v_soft_skills,    # Soft skills - matches applicant soft_skills_embedding
+                    v_job_title,      # Job title - extra info not in applicant vector
+                    v_experience      # Experience - extra info not in applicant vector
+                ], dim=0)
+                
+                # Verify final dimension
+                if v_job.shape[0] != 384 * 4:  # 4 embeddings of 384 dimensions each
+                    raise ValueError(f"Invalid final job vector dimension: got {v_job.shape[0]}, expected {384 * 4}")
+                
                 job_vectors.append((job_id_to_idx[job_id], v_job))
             
             # Check if all job IDs were retrieved

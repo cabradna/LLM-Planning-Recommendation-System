@@ -589,11 +589,18 @@ for i in tqdm(range(num_pretraining_samples), desc="Generating pretraining data"
     idx = i % len(valid_job_indices)
     job_idx = valid_job_indices[idx]
     
-    # Get job vector from tensor cache
-    job_vector = tensor_cache.job_vectors[job_idx].cpu().numpy()
+    # Get job ID from tensor cache
+    job_id = tensor_cache.job_ids[job_idx]
     
+    # Get full job vector for Q-network (no truncation)
+    full_job_vector = tensor_cache.get_job_vector(job_id).cpu().numpy()
+    
+    # Step in environment - this internally uses truncated vectors for cosine similarity
+    # but we're using the full vector for Q-network training
     next_state, reward, done, _ = env.step(job_idx)
-    pretraining_data.append((state, job_vector, reward, next_state))
+    
+    # Store the full-dimensional job vector for training
+    pretraining_data.append((state, full_job_vector, reward, next_state))
     state = next_state
 
 # Convert to numpy arrays

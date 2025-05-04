@@ -220,7 +220,42 @@ class JobRecommendationEnv:
             # Fast tensor-based calculation for a single job
             job_vector = self.job_vectors[action_idx]
             
-            # Calculate cosine similarity using tensor operations
+            # Handle dimension mismatch between applicant and job vectors
+            if job_vector.shape[0] != self.current_state.shape[0]:
+                logger.info(f"Dimension mismatch: job vector {job_vector.shape[0]}, applicant state {self.current_state.shape[0]}")
+                
+                # When comparing applicant with job, we need to ensure we're comparing analogous components
+                # - Applicant vectors: [hard_skills (384), soft_skills (384)] = 768 dimensions
+                # - Job vectors: [tech_skills (384), soft_skills (384), job_title (384), experience (384)] = 1536 dimensions
+                # 
+                # We take the first 768 dimensions of the job vector because those contain:
+                # 1. tech_skills - which should be compared with applicant's hard_skills
+                # 2. soft_skills - which should be compared with applicant's soft_skills
+                #
+                # This creates a meaningful semantic comparison between matching components:
+                # - Job tech skills ⟷ Applicant hard skills
+                # - Job soft skills ⟷ Applicant soft skills
+                if job_vector.shape[0] > self.current_state.shape[0]:
+                    # Take a slice of the job vector to match applicant dimension
+                    job_vector = job_vector[:self.current_state.shape[0]]
+                # If job vector has fewer dimensions (unlikely but handle it)
+                else:
+                    # Take a slice of the applicant state to match job vector dimension
+                    applicant_state = self.current_state[:job_vector.shape[0]]
+                    # Calculate cosine similarity using tensor operations
+                    cos_sim = torch.cosine_similarity(
+                        applicant_state.unsqueeze(0),
+                        job_vector.unsqueeze(0),
+                        dim=1
+                    ).item()
+                    
+                    # Scale reward based on config
+                    if STRATEGY_CONFIG["cosine"]["scale_reward"]:
+                        return (cos_sim + 1) / 2  # Scale from [-1,1] to [0,1]
+                    else:
+                        return cos_sim  # Keep in [-1,1] range
+            
+            # Calculate cosine similarity using tensor operations with correctly sized vectors
             cos_sim = torch.cosine_similarity(
                 self.current_state.unsqueeze(0),
                 job_vector.unsqueeze(0),
@@ -230,7 +265,42 @@ class JobRecommendationEnv:
             # Original implementation
             job_vector = self.job_vectors[action_idx]
             
-            # Calculate cosine similarity
+            # Handle dimension mismatch between applicant and job vectors
+            if job_vector.shape[0] != self.current_state.shape[0]:
+                logger.info(f"Dimension mismatch: job vector {job_vector.shape[0]}, applicant state {self.current_state.shape[0]}")
+                
+                # When comparing applicant with job, we need to ensure we're comparing analogous components
+                # - Applicant vectors: [hard_skills (384), soft_skills (384)] = 768 dimensions
+                # - Job vectors: [tech_skills (384), soft_skills (384), job_title (384), experience (384)] = 1536 dimensions
+                # 
+                # We take the first 768 dimensions of the job vector because those contain:
+                # 1. tech_skills - which should be compared with applicant's hard_skills
+                # 2. soft_skills - which should be compared with applicant's soft_skills
+                #
+                # This creates a meaningful semantic comparison between matching components:
+                # - Job tech skills ⟷ Applicant hard skills
+                # - Job soft skills ⟷ Applicant soft skills
+                if job_vector.shape[0] > self.current_state.shape[0]:
+                    # Take a slice of the job vector to match applicant dimension
+                    job_vector = job_vector[:self.current_state.shape[0]]
+                # If job vector has fewer dimensions (unlikely but handle it)
+                else:
+                    # Take a slice of the applicant state to match job vector dimension
+                    applicant_state = self.current_state[:job_vector.shape[0]]
+                    # Calculate cosine similarity using tensor operations
+                    cos_sim = torch.cosine_similarity(
+                        applicant_state.unsqueeze(0),
+                        job_vector.unsqueeze(0),
+                        dim=1
+                    ).item()
+                    
+                    # Scale reward based on config
+                    if STRATEGY_CONFIG["cosine"]["scale_reward"]:
+                        return (cos_sim + 1) / 2  # Scale from [-1,1] to [0,1]
+                    else:
+                        return cos_sim  # Keep in [-1,1] range
+            
+            # Calculate cosine similarity with correctly sized vectors
             cos_sim = torch.cosine_similarity(
                 self.current_state.unsqueeze(0),
                 job_vector.unsqueeze(0),
@@ -261,6 +331,61 @@ class JobRecommendationEnv:
             
             # Get job vectors for these indices
             job_vectors_tensor = self.tensor_cache.job_vectors[job_indices]
+            
+            # Handle dimension mismatch between applicant and job vectors
+            if job_vectors_tensor.shape[1] != self.current_state.shape[0]:
+                logger.info(f"Dimension mismatch in calculate_all_cosine_rewards: job vector {job_vectors_tensor.shape[1]}, applicant state {self.current_state.shape[0]}")
+                
+                # Option 1: Project job vectors to match applicant state dimension
+                if job_vectors_tensor.shape[1] > self.current_state.shape[0]:
+                    job_vectors_tensor = job_vectors_tensor[:, :self.current_state.shape[0]]
+                    # Continue with normalized vectors calculation below
+                # Option 2: Project applicant vector to match job vectors dimension
+                else:
+                    applicant_state = self.current_state[:job_vectors_tensor.shape[1]]
+                    # Normalize vectors
+                    normalized_state = applicant_state / applicant_state.norm()
+                    normalized_jobs = job_vectors_tensor / job_vectors_tensor.norm(dim=1, keepdim=True)
+                    
+                    # Calculate similarities
+                    similarities = torch.matmul(normalized_jobs, normalized_state)
+                    
+                    # Scale if configured
+                    if STRATEGY_CONFIG["cosine"]["scale_reward"]:
+                        similarities = (similarities + 1) / 2
+                        
+                    return similarities
+
+                # When comparing applicant vectors with job vectors, we need to ensure semantic alignment:
+                # - Applicant vectors: [hard_skills (384), soft_skills (384)] = 768 dimensions
+                # - Job vectors: [tech_skills (384), soft_skills (384), job_title (384), experience (384)] = 1536 dimensions
+                #
+                # We take the first 768 dimensions of job vectors because they contain the matching components:
+                # 1. tech_skills - which should be compared with applicant's hard_skills
+                # 2. soft_skills - which should be compared with applicant's soft_skills
+                #
+                # This ensures we're making semantically meaningful comparisons between:
+                # - Job tech skills ⟷ Applicant hard skills  
+                # - Job soft skills ⟷ Applicant soft skills
+                if job_vectors_tensor.shape[1] > self.current_state.shape[0]:
+                    # Take a slice of job vectors to match applicant dimension
+                    job_vectors_tensor = job_vectors_tensor[:, :self.current_state.shape[0]]
+                    # Continue with normalized vectors calculation below
+                # If job vectors have fewer dimensions (unlikely but handle it)
+                else:
+                    applicant_state = self.current_state[:job_vectors_tensor.shape[1]]
+                    # Normalize vectors
+                    normalized_state = applicant_state / applicant_state.norm()
+                    normalized_jobs = job_vectors_tensor / job_vectors_tensor.norm(dim=1, keepdim=True)
+                    
+                    # Calculate similarities
+                    similarities = torch.matmul(normalized_jobs, normalized_state)
+                    
+                    # Scale if configured
+                    if STRATEGY_CONFIG["cosine"]["scale_reward"]:
+                        similarities = (similarities + 1) / 2
+                        
+                    return similarities
             
             # Normalize vectors
             normalized_state = self.current_state / self.current_state.norm()

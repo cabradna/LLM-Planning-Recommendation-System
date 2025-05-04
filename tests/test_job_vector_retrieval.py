@@ -19,6 +19,13 @@ import torch
 import numpy as np
 from pathlib import Path
 
+# Add the src directory to the path
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../src')))
+
+from src.data.database import DatabaseConnector
+from src.data.tensor_cache import TensorCache
+from src.environments.job_env import JobRecommendationEnv
+
 # Configure logging for this test
 logging.basicConfig(
     level=logging.INFO,
@@ -32,7 +39,6 @@ if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
 # Import necessary components
-from src.data.database import DatabaseConnector
 from config.config import TRAINING_CONFIG
 
 class TestJobVectorRetrieval(unittest.TestCase):
