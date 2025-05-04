@@ -246,76 +246,25 @@ except Exception as e:
     raise
 
 # %% [markdown]
-# ## 5. Data Loading
+# ## 5. Data Loading and Tensor Cache Initialization
 # 
-# We'll now access the database to:
-# 1. Retrieve candidate (applicant) embedding data
-# 2. Sample a subset of jobs from the database
-# 3. Retrieve job embedding vectors
-# 
-# These operations use the DatabaseConnector methods to efficiently access the data needed for training and evaluation.
+# We'll now:
+# 1. Select a target candidate for training
+# 2. Initialize the tensor cache with the target candidate
+# 3. Create the environment with the cache
 
 # %%
-# Query the database to get a list of candidate IDs
+# Get target candidate ID
 try:
-    # Get the candidates_text collection
     collection = db_connector.db[db_connector.collections["candidates_text"]]
-    
-    # Query for candidate IDs (limit to 10 for demonstration)
     candidate_ids = [doc["_id"] for doc in collection.find({}, {"_id": 1}).limit(TRAINING_CONFIG["num_candidates"])]
-    
-    if not candidate_ids:
-        raise ValueError("No candidates found in the database")
-    
-    # Select the first candidate for demonstration
     target_candidate_id = candidate_ids[0]
     print(f"Selected target candidate ID: {target_candidate_id}")
-    
-    # Get the candidate embedding directly from the database connector
-    candidate_embedding = db_connector.get_applicant_state(target_candidate_id)
-    print(f"Candidate embedding shape: {candidate_embedding.shape}")
-    
-    # Sample jobs from the database with embedding validation to ensure all have required fields
-    sampled_jobs = db_connector.sample_candidate_jobs(n=TRAINING_CONFIG["num_jobs"], validate_embeddings=True)
-    job_ids = [job["_id"] for job in sampled_jobs]
-    print(f"Sampled {len(job_ids)} jobs from the database (all with valid embeddings)")
-    
-    # Get job vectors for the sampled jobs directly from the database connector
-    job_vectors = db_connector.get_job_vectors(job_ids)
-    print(f"Fetched {len(job_vectors)} job vectors")
-    
-    # Convert job vectors to NumPy array for easier handling
-    job_vectors_np = np.array([tensor.cpu().numpy() for tensor in job_vectors])
-    print(f"Job vectors shape: {job_vectors_np.shape}")
-    
 except Exception as e:
-    print(f"Error loading data: {e}")
+    print(f"Error selecting target candidate: {e}")
     raise
 
-# %% [markdown]
-# ## 6. Model Initialization
-# 
-# We'll initialize the neural networks used in the Dyna-Q algorithm:
-# 
-# 1. **Q-Network**: Approximates the value function mapping state-action pairs to expected returns
-# 2. **Target Q-Network**: A copy of the Q-Network used for stable learning
-# 3. **World Model**: Predicts next states and rewards based on current states and actions
-# 
-# Each network is configured according to the parameters specified in the configuration file.
-
-# %%
-# Create environment based on reward strategy
-print(f"Creating environment with {reward_strategy} reward strategy...")
-
-# %% [markdown]
-# ## Tensor Cache Initialization
-# 
-# Initialize the tensor cache to significantly speed up training by preloading all data from the database to GPU memory.
-
-# %%
 # Initialize tensor cache
-
-# Define cache configuration
 CACHE_CONFIG = {
     "enabled": True,                                    # Whether to use tensor cache
     "device": TRAINING_CONFIG.get("device", "cuda"),    # Device to store tensors on

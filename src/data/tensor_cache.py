@@ -116,6 +116,7 @@ class TensorCache:
         
         # 3. Filter for jobs with complete embeddings
         valid_jobs = []
+        self.job_ids = []
         for job in all_jobs:
             job_id = str(job["_id"])
             # Find matching embedding
@@ -128,11 +129,12 @@ class TensorCache:
                     len(matching_embedding.get("soft_skills_embeddings", [])) > 0 and
                     len(matching_embedding.get("experience_requirements_embeddings", [])) > 0):
                     valid_jobs.append(job)
+                    self.job_ids.append(matching_embedding["original_job_id"])
         
         logger.info(f"Found {len(valid_jobs)} jobs with complete embeddings")
         
         # 4. Store job IDs for later reference
-        self.job_ids = [str(job["_id"]) for job in valid_jobs]
+        self.original_job_ids = [str(job["original_job_id"]) for job in valid_jobs]
         
         # 5. Store job metadata
         self.job_metadata = {str(job["_id"]): job for job in valid_jobs}
