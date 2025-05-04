@@ -215,20 +215,24 @@ class TensorCache:
         Get applicant state vector from cache.
         
         Args:
-            applicant_id: ID of the applicant
+            applicant_id: ID of the applicant (can be ObjectId or str).
             
         Returns:
-            torch.Tensor: Applicant state vector
+            torch.Tensor: Applicant state vector.
             
         Raises:
-            KeyError: If applicant not in cache
+            KeyError: If applicant not in cache.
         """
-        if applicant_id in self.applicant_states:
+        # Ensure we use the string representation for dictionary lookup
+        applicant_id_str = str(applicant_id)
+        
+        if applicant_id_str in self.applicant_states:
             self.cache_hits += 1
-            return self.applicant_states[applicant_id]
+            return self.applicant_states[applicant_id_str]
         else:
             self.cache_misses += 1
-            raise KeyError(f"Applicant {applicant_id} not found in cache")
+            # Raise error using the string representation for clarity
+            raise KeyError(f"Applicant {applicant_id_str} not found in cache")
     
     def sample_jobs(self, n=100, exclude_ids=None):
         """
@@ -265,33 +269,12 @@ class TensorCache:
         # Get job IDs for sampled jobs
         sampled_job_ids = [self.job_text_ids[i] for i in sampled_indices]
         
-        # --- Start Debugging --- 
-        logger.debug(f"sample_jobs: Trying to sample {n} jobs.")
-        if sampled_job_ids:
-            logger.debug(f"sample_jobs: First 5 sampled job IDs (type {type(sampled_job_ids[0])}): {sampled_job_ids[:5]}")
-            first_metadata_key = next(iter(self.job_metadata)) if self.job_metadata else None
-            if first_metadata_key:
-                 logger.debug(f"sample_jobs: First metadata key (type {type(first_metadata_key)}): {first_metadata_key}")
-            else:
-                 logger.debug("sample_jobs: Metadata dictionary is empty!") # Should not happen if cache loaded jobs
-        else:
-             logger.debug("sample_jobs: No job IDs were sampled (available indices might be empty).")
-        # --- End Debugging ---
-
         # Get job documents for sampled jobs
         sampled_docs = []
         for job_id in sampled_job_ids:
-            # Convert job_id to string for metadata lookup
-            job_id_str = str(job_id)
-            metadata_found = job_id_str in self.job_metadata
-            
-            # --- Start Debugging --- 
-            logger.debug(f"  Checking job_id: {job_id} (type {type(job_id)}) -> str: \"{job_id_str}\" (type {type(job_id_str)}). Found in metadata: {metadata_found}")
-            # --- End Debugging --- 
-            
-            if metadata_found:
-                metadata = self.job_metadata[job_id_str]
+            if job_id in self.job_metadata:
                 # Create a document similar to what would be returned from the database
+                metadata = self.job_metadata[job_id]
                 doc = {
                     "_id": job_id,
                     "job_title": metadata["job_title"],
@@ -300,14 +283,6 @@ class TensorCache:
                     "soft_skills": metadata.get("soft_skills", [])
                 }
                 sampled_docs.append(doc)
-            # --- Start Debugging --- 
-            # else: # Optional: Log if not found
-            #     logger.debug(f"    Job ID string \"{job_id_str}\" not found in metadata keys.")
-            # --- End Debugging ---
-        
-        # --- Start Debugging ---
-        logger.debug(f"sample_jobs: Finished loop. Found {len(sampled_docs)} matching documents.")
-        # --- End Debugging ---
         
         return sampled_docs, sampled_vectors, sampled_job_ids
     
