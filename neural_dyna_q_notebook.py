@@ -575,72 +575,19 @@ batch_size = TRAINING_CONFIG["batch_size"]
 
 print(f"Starting pretraining with {reward_strategy} strategy...")
 
-# Generate pretraining data using tensor cache
-pretraining_data = []
-state = env.reset(applicant_id=target_candidate_id)
+# Skip the pretraining data generation phase - will use real data instead
+print("Skipping simulated data generation - using real data for training")
 
-# Get valid job indices - since get_valid_job_indices() doesn't exist, use job_ids directly
-valid_job_indices = list(range(len(tensor_cache.job_ids)))
-num_pretraining_samples = min(TRAINING_CONFIG["pretraining"]["num_samples"], len(valid_job_indices))
-print(f"Using {len(valid_job_indices)} valid jobs from tensor cache for pretraining")
+# Directly configure the agent for training
+agent.planning_steps = TRAINING_CONFIG['planning_steps']
+agent.batch_size = TRAINING_CONFIG['batch_size']
+agent.gamma = TRAINING_CONFIG['gamma']
 
-for i in tqdm(range(num_pretraining_samples), desc="Generating pretraining data"):
-    # Get index from valid_job_indices
-    idx = i % len(valid_job_indices)
-    job_idx = valid_job_indices[idx]
-    
-    # Get job ID from tensor cache
-    job_id = tensor_cache.job_ids[job_idx]
-    
-    # Get full job vector for Q-network (no truncation)
-    full_job_vector = tensor_cache.get_job_vector(job_id).cpu().numpy()
-    
-    # Step in environment - this internally uses truncated vectors for cosine similarity
-    # but we're using the full vector for Q-network training
-    next_state, reward, done, _ = env.step(job_idx)
-    
-    # Store the full-dimensional job vector for training
-    pretraining_data.append((state, full_job_vector, reward, next_state))
-    state = next_state
+# Reset environment with target candidate
+env.reset(applicant_id=target_candidate_id)
+print("Environment ready for real data processing")
 
-# Convert to numpy arrays
-states = np.array([d[0] for d in pretraining_data])
-actions = np.array([d[1] for d in pretraining_data])
-rewards = np.array([d[2] for d in pretraining_data])
-next_states = np.array([d[3] for d in pretraining_data])
-
-# Verify dimensions
-print(f"States shape: {states.shape}")
-print(f"Actions shape: {actions.shape}")
-print(f"Expected state_dim: {MODEL_CONFIG['q_network']['state_dim']}")
-print(f"Expected action_dim: {MODEL_CONFIG['q_network']['action_dim']}")
-
-# Ensure states and actions have correct dimensions
-if states.shape[1] != MODEL_CONFIG['q_network']['state_dim']:
-    raise ValueError(f"State dimension mismatch. Got {states.shape[1]}, expected {MODEL_CONFIG['q_network']['state_dim']}")
-if actions.shape[1] != MODEL_CONFIG['q_network']['action_dim']:
-    raise ValueError(f"Action dimension mismatch. Got {actions.shape[1]}, expected {MODEL_CONFIG['q_network']['action_dim']}")
-
-# Run pretraining using agent's built-in pretrain method
-pretraining_metrics = agent.pretrain(
-    states=states,
-    actions=actions,
-    rewards=rewards,
-    next_states=next_states,
-    num_epochs=num_pretraining_epochs,
-    batch_size=batch_size
-)
-
-# Plot pretraining metrics
-visualizer.plot_training_metrics(
-    metrics={
-        'q_losses': pretraining_metrics['q_losses'],
-        'world_losses': pretraining_metrics['world_losses']
-    },
-    title="Pretraining Losses"
-)
-
-print("Pretraining completed successfully.")
+print("Pretraining configuration completed.")
 
 # %% [markdown]
 # ## 10. Main Training Loop
