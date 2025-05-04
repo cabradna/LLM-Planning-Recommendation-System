@@ -119,14 +119,14 @@ class TensorCache:
         for job in all_jobs:
             job_id = str(job["_id"])
             # Find matching embedding
-            matching_embedding = next((emb for emb in all_embeddings if str(emb["_id"]) == job_id), None)
+            matching_embedding = next((emb for emb in all_embeddings if str(emb["original_job_id"]) == job_id), None)
             
             if matching_embedding:
-                # Check if all 4 embedding vectors are present and have non-zero length
-                if (len(matching_embedding.get("description_embedding", [])) > 0 and 
-                    len(matching_embedding.get("requirements_embedding", [])) > 0 and 
-                    len(matching_embedding.get("technical_skills_embedding", [])) > 0 and 
-                    len(matching_embedding.get("soft_skills_embedding", [])) > 0):
+                # Check if all required embedding vectors are present and have non-zero length
+                if (len(matching_embedding.get("job_title_embeddings", [])) > 0 and 
+                    len(matching_embedding.get("tech_skills_vectors", [])) > 0 and 
+                    len(matching_embedding.get("soft_skills_embeddings", [])) > 0 and
+                    len(matching_embedding.get("experience_requirements_embeddings", [])) > 0):
                     valid_jobs.append(job)
         
         logger.info(f"Found {len(valid_jobs)} jobs with complete embeddings")
@@ -134,17 +134,8 @@ class TensorCache:
         # 4. Store job IDs for later reference
         self.job_ids = [str(job["_id"]) for job in valid_jobs]
         
-        # 5. Store job metadata for each valid job
-        for job in valid_jobs:
-            job_id = str(job["_id"])
-            self.job_metadata[job_id] = {
-                "job_title": job.get("job_title", ""),
-                "description": job.get("description", ""),
-                "technical_skills": job.get("technical_skills", []),
-                "soft_skills": job.get("soft_skills", [])
-            }
-        
-        logger.info(f"Stored metadata for {len(self.job_metadata)} jobs")
+        # 5. Store job metadata
+        self.job_metadata = {str(job["_id"]): job for job in valid_jobs}
         
         # 6. Get and store job vectors
         job_vectors = db_connector.get_job_vectors(self.job_ids)
