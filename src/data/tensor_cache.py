@@ -161,9 +161,10 @@ class TensorCache:
         job_title_dim = len(sample_emb.get("job_title_embeddings", []))
         tech_skills_dim = len(sample_emb.get("tech_skills_vectors", []))
         soft_skills_dim = len(sample_emb.get("soft_skills_embeddings", []))
+        exp_requirements_dim = 384  # Experience requirements dimension (always 384)
         
-        total_dim = job_title_dim + tech_skills_dim + soft_skills_dim
-        logger.info(f"Job vector dimension: {total_dim} (title: {job_title_dim}, tech: {tech_skills_dim}, soft: {soft_skills_dim})")
+        total_dim = job_title_dim + tech_skills_dim + soft_skills_dim + exp_requirements_dim
+        logger.info(f"Job vector dimension: {total_dim} (title: {job_title_dim}, tech: {tech_skills_dim}, soft: {soft_skills_dim}, exp: {exp_requirements_dim})")
         
         # 8. Initialize the job vectors tensor
         self.job_vectors = torch.zeros((len(valid_job_ids), total_dim), device=self.device)
