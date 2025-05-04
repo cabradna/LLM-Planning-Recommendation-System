@@ -227,7 +227,7 @@ class DatabaseConnector:
             logger.error(f"Error sampling candidate jobs: {e}")
             raise
     
-    def get_job_vectors(self, job_ids: List[str], valid_only: bool = False) -> List[torch.Tensor]:
+    def get_job_vectors(self, job_ids: List[str]) -> List[torch.Tensor]:
         """
         Retrieve job embeddings for a list of job IDs.
         
@@ -258,50 +258,6 @@ class DatabaseConnector:
                 v_soft_skills = torch.tensor(emb_doc.get("soft_skills_embeddings", []), dtype=torch.float)
                 v_experience = torch.tensor(emb_doc.get("experience_requirements_embeddings", []), dtype=torch.float)
                 
-                # If valid_only is True, skip jobs with missing or empty embeddings
-                if valid_only:
-                    if (len(v_job_title) == 0 or len(v_job_skills) == 0 or 
-                        len(v_soft_skills) == 0 or len(v_experience) == 0):
-                        logger.debug(f"Skipping job {job_id} due to missing embeddings")
-                        continue
-                
-                # Ensure each vector has correct dimensions (384) for consistent concatenation
-                if len(v_job_title) > 0 and v_job_title.shape[0] != 384:
-                    raise ValueError(f"Job title embedding dimension mismatch for job {job_id}: {v_job_title.shape[0]} vs expected 384")
-                    
-                if len(v_job_skills) > 0 and v_job_skills.shape[0] != 384:
-                    raise ValueError(f"Tech skills embedding dimension mismatch for job {job_id}: {v_job_skills.shape[0]} vs expected 384")
-                    
-                if len(v_soft_skills) > 0 and v_soft_skills.shape[0] != 384:
-                    raise ValueError(f"Soft skills embedding dimension mismatch for job {job_id}: {v_soft_skills.shape[0]} vs expected 384")
-                    
-                if len(v_experience) > 0 and v_experience.shape[0] != 384:
-                    raise ValueError(f"Experience requirements embedding dimension mismatch for job {job_id}: {v_experience.shape[0]} vs expected 384")
-                
-                # If vectors are empty but required, this is a critical issue
-                if len(v_job_title) == 0:
-                    raise ValueError(f"Missing required job_title_embeddings for job {job_id}")
-                    
-                if len(v_job_skills) == 0:
-                    raise ValueError(f"Missing required tech_skills_vectors for job {job_id}")
-                    
-                if len(v_soft_skills) == 0:
-                    raise ValueError(f"Missing required soft_skills_embeddings for job {job_id}")
-                    
-                if len(v_experience) == 0:
-                    raise ValueError(f"Missing required experience_requirements_embeddings for job {job_id}")
-                
-                # Combine into a single vector
-                v_job = torch.cat([
-                    v_job_title,
-                    v_job_skills,
-                    v_experience,
-                    v_soft_skills
-                ], dim=0)
-                
-                # Verify final dimension
-                if v_job.shape[0] != 384 * 4:  # 4 embeddings of 384 dimensions each
-                    raise ValueError(f"Invalid final job vector dimension: got {v_job.shape[0]}, expected {384 * 4}")
                 
                 # Combine into a single vector with tech and soft skills first to match applicant vector order
                 v_job = torch.cat([
@@ -310,10 +266,6 @@ class DatabaseConnector:
                     v_job_title,      # Job title - extra info not in applicant vector
                     v_experience      # Experience - extra info not in applicant vector
                 ], dim=0)
-                
-                # Verify final dimension
-                if v_job.shape[0] != 384 * 4:  # 4 embeddings of 384 dimensions each
-                    raise ValueError(f"Invalid final job vector dimension: got {v_job.shape[0]}, expected {384 * 4}")
                 
                 job_vectors.append((job_id_to_idx[job_id], v_job))
             

@@ -114,34 +114,40 @@ class TensorCache:
         all_embeddings = list(db_connector.db[db_connector.collections["job_embeddings"]].find({}))
         logger.info(f"Retrieved {len(all_embeddings)} job embeddings")
         
-        # 3. Get valid job IDs from embeddings
-        valid_job_ids = [str(emb["original_job_id"]) for emb in all_embeddings]
+        # 3. Filter for jobs with complete embeddings
+        valid_jobs = []
+        for job in all_jobs:
+            job_id = str(job["_id"])
+            # Find matching embedding
+            matching_embedding = next((emb for emb in all_embeddings if str(emb["_id"]) == job_id), None)
+            
+            if matching_embedding:
+                # Check if all 4 embedding vectors are present and have non-zero length
+                if (len(matching_embedding.get("description_embedding", [])) > 0 and 
+                    len(matching_embedding.get("requirements_embedding", [])) > 0 and 
+                    len(matching_embedding.get("technical_skills_embedding", [])) > 0 and 
+                    len(matching_embedding.get("soft_skills_embedding", [])) > 0):
+                    valid_jobs.append(job)
         
-        # 4. Get valid job vectors using valid_only=True
-        job_vectors = db_connector.get_job_vectors(valid_job_ids, valid_only=True)
-        valid_job_ids = [job_id for job_id in valid_job_ids if job_id in [str(emb["original_job_id"]) for emb in all_embeddings]]
+        logger.info(f"Found {len(valid_jobs)} jobs with complete embeddings")
         
-        logger.info(f"Found {len(valid_job_ids)} jobs with complete embeddings")
+        # 4. Store job IDs for later reference
+        self.job_ids = [str(job["_id"]) for job in valid_jobs]
         
-        # 5. Store job IDs for later reference
-        self.job_ids = valid_job_ids
-        
-        # 6. Store job metadata for each valid job
-        job_id_to_doc = {str(job["_id"]): job for job in all_jobs}
-        
-        for job_id in valid_job_ids:
-            if job_id in job_id_to_doc:
-                job_doc = job_id_to_doc[job_id]
-                self.job_metadata[job_id] = {
-                    "job_title": job_doc.get("job_title", ""),
-                    "description": job_doc.get("description", ""),
-                    "technical_skills": job_doc.get("technical_skills", []),
-                    "soft_skills": job_doc.get("soft_skills", [])
-                }
+        # 5. Store job metadata for each valid job
+        for job in valid_jobs:
+            job_id = str(job["_id"])
+            self.job_metadata[job_id] = {
+                "job_title": job.get("job_title", ""),
+                "description": job.get("description", ""),
+                "technical_skills": job.get("technical_skills", []),
+                "soft_skills": job.get("soft_skills", [])
+            }
         
         logger.info(f"Stored metadata for {len(self.job_metadata)} jobs")
         
-        # 7. Store job vectors
+        # 6. Get and store job vectors
+        job_vectors = db_connector.get_job_vectors(self.job_ids)
         self.job_vectors = torch.stack(job_vectors).to(self.device)
         logger.info(f"Created job vectors tensor with shape {self.job_vectors.shape}")
     
