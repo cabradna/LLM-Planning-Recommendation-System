@@ -289,24 +289,21 @@ if CACHE_CONFIG["enabled"]:
     print(f"Initialization time: {stats['initialization_time']:.2f} seconds")
     print(f"Memory device: {stats['device']}")
     
-    # Create environment with cache
+    # Create environment with cache (NO db_connector)
     if reward_strategy == "cosine":
         env = JobRecommendationEnv(
-            db_connector=db_connector,
             tensor_cache=tensor_cache,
             reward_strategy="cosine",
             random_seed=ENV_CONFIG["random_seed"]
         )
     elif reward_strategy == "llm":
         env = LLMSimulatorEnv(
-            db_connector=db_connector,
             tensor_cache=tensor_cache,
             reward_scheme=STRATEGY_CONFIG["llm"]["response_mapping"],
             random_seed=ENV_CONFIG["random_seed"]
         )
     elif reward_strategy == "hybrid":
         env = HybridEnv(
-            db_connector=db_connector,
             tensor_cache=tensor_cache,
             reward_scheme=STRATEGY_CONFIG["llm"]["response_mapping"],
             cosine_weight=STRATEGY_CONFIG["hybrid"]["initial_cosine_weight"],
@@ -317,31 +314,8 @@ if CACHE_CONFIG["enabled"]:
     
     print(f"Created {reward_strategy} environment with tensor cache")
 else:
-    # Create environment without cache
-    tensor_cache = None
-    if reward_strategy == "cosine":
-        env = JobRecommendationEnv(
-            db_connector=db_connector,
-            reward_strategy="cosine",
-            random_seed=ENV_CONFIG["random_seed"]
-        )
-    elif reward_strategy == "llm":
-        env = LLMSimulatorEnv(
-            db_connector=db_connector,
-            reward_scheme=STRATEGY_CONFIG["llm"]["response_mapping"],
-            random_seed=ENV_CONFIG["random_seed"]
-        )
-    elif reward_strategy == "hybrid":
-        env = HybridEnv(
-            db_connector=db_connector,
-            reward_scheme=STRATEGY_CONFIG["llm"]["response_mapping"],
-            cosine_weight=STRATEGY_CONFIG["hybrid"]["initial_cosine_weight"],
-            random_seed=ENV_CONFIG["random_seed"]
-        )
-    else:
-        raise ValueError(f"Unknown reward strategy: {reward_strategy}")
-    
-    print(f"Created {reward_strategy} environment without tensor cache")
+    # Environment requires cache now, so this path should error or not be taken
+    raise RuntimeError("TensorCache is disabled in CACHE_CONFIG, but the environment now requires it.")
 
 # %%
 # Initialize Q-network
@@ -361,7 +335,7 @@ world_model = WorldModel(
     activation=MODEL_CONFIG["world_model"]["activation"]
 ).to(device)
 
-# Initialize DynaQAgent
+# Initialize DynaQAgent (pass tensor_cache, no db_connector mentioned)
 agent = DynaQAgent(
     state_dim=MODEL_CONFIG["q_network"]["state_dim"],
     action_dim=MODEL_CONFIG["q_network"]["action_dim"],
@@ -370,7 +344,7 @@ agent = DynaQAgent(
     training_strategy=reward_strategy,
     device=device,
     target_applicant_id=target_candidate_id,
-    tensor_cache=tensor_cache
+    tensor_cache=tensor_cache # Pass the initialized cache
 )
 
 # Initialize Visualizer
@@ -433,9 +407,11 @@ if STRATEGY_CONFIG["llm"]["enabled"] and (reward_strategy == "llm" or reward_str
     
     print(f"LLM model loaded successfully: {model_id}")
     
-    # Add LLM to the environment
-    env.setup_llm(llm_model, tokenizer)
-    print(f"Added LLM to {reward_strategy} environment")
+    # Add LLM to the environment using the updated method
+    # env.setup_llm should handle creating HybridEnv if needed
+    # The method now returns the potentially new env instance
+    env = env.setup_llm(llm_model, tokenizer, device="auto") 
+    print(f"Ensured LLM is set up in {env.__class__.__name__} for strategy '{reward_strategy}'")
 
 # %% [markdown]
 # ## 8. Training Setup
@@ -758,7 +734,7 @@ baseline_strategy = EVAL_CONFIG["baseline_strategy"]
 
 print("Starting evaluation...")
 
-# Create a baseline agent for comparison
+# Create a baseline agent for comparison (NO db_connector)
 baseline_agent = DynaQAgent(
     state_dim=MODEL_CONFIG["q_network"]["state_dim"],
     action_dim=MODEL_CONFIG["q_network"]["action_dim"],
@@ -823,48 +799,71 @@ remaining_job_indices = valid_job_indices.copy()
 
 # Generate top-K recommendations
 for _ in range(min(num_recommendations, len(valid_job_indices))):
-    # Get job tensors for remaining indices
-    action_tensors = [tensor_cache.job_vectors[idx] for idx in remaining_job_indices]
+    # Get job tensors for remaining indices from CACHE
+    action_tensors = [tensor_cache.get_job_vector_by_index(idx) for idx in remaining_job_indices]
     
-    # Select best job according to Q-network
-    action_idx, _ = agent.select_action(state, action_tensors, eval_mode=True)
+    # Handle case where action_tensors might be empty if remaining_job_indices is empty
+    if not action_tensors:
+        print("No more actions available to recommend.")
+        break
+        
+    # Select best job according to Q-network (using cache vectors)
+    # Ensure state is valid tensor
+    if not isinstance(state, torch.Tensor):
+         state = torch.tensor(state, device=device, dtype=torch.float32) # Ensure state is tensor
+         
+    # Pass the list of tensors directly
+    action_idx, _ = agent.select_action(state, action_tensors, eval_mode=True) 
     
-    # Get the corresponding job_id
-    selected_idx = remaining_job_indices[action_idx]
-    job_id = tensor_cache.job_ids[selected_idx]
+    # Get the corresponding CACHE index
+    selected_cache_idx = remaining_job_indices[action_idx]
+    job_id = tensor_cache.get_job_id(selected_cache_idx) # Get original job ID using cache index
     
-    # Calculate Q-value for logging
+    # Calculate Q-value for logging (using cache vector)
     with torch.no_grad():
-        state_tensor = torch.tensor(state, device=device).unsqueeze(0)
-        job_tensor = tensor_cache.job_vectors[selected_idx].unsqueeze(0)
+        # Ensure state_tensor is correctly shaped [1, state_dim]
+        state_tensor = state.unsqueeze(0) if state.dim() == 1 else state 
+        # Get action tensor from cache and ensure shape [1, action_dim]
+        job_tensor = tensor_cache.get_job_vector_by_index(selected_cache_idx).unsqueeze(0)
         q_value = agent.q_network(state_tensor, job_tensor).item()
     
     recommended_jobs.append(job_id)
     recommendation_scores.append(q_value)
     
-    # Remove selected job from consideration for next selection
+    # Remove selected job (using its index within remaining_job_indices) from consideration for next selection
     remaining_job_indices.pop(action_idx)
 
-# Display recommendations with details
+# Display recommendations with details from CACHE METADATA
 print("\n=== Top Job Recommendations ===\n")
 for i, (job_id, score) in enumerate(zip(recommended_jobs, recommendation_scores)):
     print(f"Recommendation #{i+1}: [Q-Value: {score:.4f}]")
-    print(f"Job ID: {job_id}")
+    # Ensure job_id is the correct type (likely ObjectId initially)
+    job_id_str = str(job_id) 
+    print(f"Job ID: {job_id_str}")
     
-    # Retrieve and display job details
+    # Retrieve and display job details from TensorCache metadata
     try:
-        job_details = db_connector.get_job_details(job_id)
+        # Use string representation for metadata lookup
+        job_details = tensor_cache.get_job_metadata(job_id_str) 
         print(f"Title: {job_details.get('job_title', 'N/A')}")
         
         # Display truncated description
         description = job_details.get('description', 'N/A')
         print(f"Description: {description[:100]}..." if len(description) > 100 else f"Description: {description}")
         
-        # Display technical skills if available
+        # Display technical skills if available in metadata
         if 'technical_skills' in job_details:
-            print(f"Technical Skills: {', '.join(job_details['technical_skills'])}")
+            # Ensure skills are joinable (list of strings)
+            skills = job_details['technical_skills']
+            if isinstance(skills, list):
+                 print(f"Technical Skills: {', '.join(map(str, skills))}")
+            else:
+                 print(f"Technical Skills: {skills}") # Print as is if not a list
+
+    except KeyError:
+        print(f"Error: Metadata not found in TensorCache for job {job_id_str}")
     except Exception as e:
-        print(f"Error retrieving job details: {e}")
+        print(f"Error retrieving job details from cache: {e}")
     print("-" * 50)
 
 # %% [markdown]
