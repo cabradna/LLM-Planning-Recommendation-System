@@ -4,6 +4,16 @@ Configuration settings for the Dyna-Q Job Recommender model.
 
 import torch
 
+# Environment Configuration
+ENV_CONFIG = {
+    "random_seed": 42,  # Random seed for environment initialization
+    "max_jobs_per_episode": 100,  # Maximum number of jobs to consider per episode
+    "reward_scaling": 1.0,  # Scale factor for rewards
+    "normalize_rewards": True,  # Whether to normalize rewards
+    "use_tensor_cache": True,  # Whether to use tensor cache for faster data access
+    "cache_device": "cuda" if torch.cuda.is_available() else "cpu"  # Device for tensor cache
+}
+
 # Hugging Face Configuration
 HF_CONFIG = {
     "token_path": "hf_primary_token.txt"
