@@ -570,24 +570,100 @@ print("Training setup completed successfully.")
 
 # %%
 # Define pretraining parameters from config
+num_pretraining_samples = TRAINING_CONFIG["pretraining"]["num_samples"]
 num_pretraining_epochs = TRAINING_CONFIG["pretraining"]["num_epochs"]
 batch_size = TRAINING_CONFIG["batch_size"]
 
 print(f"Starting pretraining with {reward_strategy} strategy...")
 
-# Skip the pretraining data generation phase - will use real data instead
-print("Skipping simulated data generation - using real data for training")
+# Generate pretraining data using tensor cache
+print("Generating pretraining data using tensor cache")
+pretraining_data = []
+state = env.reset(applicant_id=target_candidate_id)
 
-# Directly configure the agent for training
+# Get valid job indices from tensor cache
+valid_job_indices = tensor_cache.get_valid_job_indices()
+print(f"Using {len(valid_job_indices)} valid jobs from tensor cache for pretraining")
+
+# Collect pretraining experiences
+for i in tqdm(range(min(num_pretraining_samples, len(valid_job_indices))), desc="Generating pretraining data"):
+    # Select a job index
+    job_idx = valid_job_indices[i % len(valid_job_indices)]
+    
+    # Take a step in the environment with this job
+    next_state, reward, done, _ = env.step(job_idx)
+    
+    # Store the experience as tensors
+    job_vector = tensor_cache.get_job_vector_by_index(job_idx)
+    pretraining_data.append((state, job_vector, reward, next_state))
+    
+    # Update state for next iteration
+    state = next_state
+
+print(f"Collected {len(pretraining_data)} pretraining experiences")
+
+# Create tensor batches directly
+# We assume state and next_state are tensors because env.reset() and env.step() should return tensors when using tensor_cache
+# We assume job_vector is a tensor because we got it directly from tensor_cache
+# Only reward might need conversion if it's a scalar
+
+# Stack states
+states = torch.stack([d[0] for d in pretraining_data])
+
+# Stack actions (job vectors)
+actions = torch.stack([d[1] for d in pretraining_data])
+
+# Convert rewards to tensor if needed
+if isinstance(pretraining_data[0][2], torch.Tensor):
+    rewards = torch.stack([d[2] for d in pretraining_data])
+else:
+    rewards = torch.tensor([d[2] for d in pretraining_data], device=device)
+
+# Stack next states
+next_states = torch.stack([d[3] for d in pretraining_data])
+
+# Verify dimensions
+print(f"States shape: {states.shape}")
+print(f"Actions shape: {actions.shape}")
+print(f"Rewards shape: {rewards.shape}")
+print(f"Next states shape: {next_states.shape}")
+print(f"Expected state_dim: {MODEL_CONFIG['q_network']['state_dim']}")
+print(f"Expected action_dim: {MODEL_CONFIG['q_network']['action_dim']}")
+
+# Verify state and action dimensions
+state_dim = states.shape[1]
+action_dim = actions.shape[1]
+if state_dim != MODEL_CONFIG['q_network']['state_dim']:
+    raise ValueError(f"State dimension mismatch. Got {state_dim}, expected {MODEL_CONFIG['q_network']['state_dim']}")
+if action_dim != MODEL_CONFIG['q_network']['action_dim']:
+    raise ValueError(f"Action dimension mismatch. Got {action_dim}, expected {MODEL_CONFIG['q_network']['action_dim']}")
+
+# Run pretraining using agent's built-in pretrain method
+print("Starting pretraining of neural networks")
+pretraining_metrics = agent.pretrain(
+    states=states,
+    actions=actions,
+    rewards=rewards,
+    next_states=next_states,
+    num_epochs=num_pretraining_epochs,
+    batch_size=batch_size
+)
+
+# Plot pretraining metrics
+visualizer.plot_training_metrics(
+    metrics={
+        'q_losses': pretraining_metrics['q_losses'],
+        'world_losses': pretraining_metrics['world_losses']
+    },
+    title="Pretraining Losses"
+)
+
+# Configure agent for main training
 agent.planning_steps = TRAINING_CONFIG['planning_steps']
 agent.batch_size = TRAINING_CONFIG['batch_size']
 agent.gamma = TRAINING_CONFIG['gamma']
 
-# Reset environment with target candidate
-env.reset(applicant_id=target_candidate_id)
-print("Environment ready for real data processing")
-
-print("Pretraining configuration completed.")
+print("Pretraining completed successfully.")
 
 # %% [markdown]
 # ## 10. Main Training Loop

@@ -1,0 +1,6 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+1. The folder docs/ contains the philosophy of the codebase. Check any and all changes thoroughly against the documents here. Any implementation that contradicts these documents is incorrect. In order for you to implement any change, reason about why it complies perfectly with the docs.
