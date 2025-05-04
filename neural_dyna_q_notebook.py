@@ -483,57 +483,78 @@ pretraining_strategy = reward_strategy
 
 print(f"Starting pretraining with {pretraining_strategy} strategy...")
 
-# Generate pretraining data using tensor cache
-print("Generating pretraining data using tensor cache")
+# Generate pretraining data directly using tensor cache
+print("Generating pretraining data using tensor cache only")
 pretraining_data = []
-state = env.reset(applicant_id=target_candidate_id)
+
+# Get applicant state from cache
+try:
+    state = tensor_cache.get_applicant_state(target_candidate_id)
+    next_state = state # Assuming static state for pretraining
+except KeyError as e:
+    print(f"Error: {e}. Applicant not found in cache. Cannot proceed with pretraining.")
+    raise
 
 # Get valid job indices from tensor cache
 valid_job_indices = tensor_cache.get_valid_job_indices()
 print(f"Using {len(valid_job_indices)} valid jobs from tensor cache for pretraining")
 
-# Get the valid actions from the environment to ensure indices match
-valid_actions = env.get_valid_actions()
-print(f"Environment has {len(valid_actions)} valid actions")
+if not valid_job_indices:
+    raise ValueError("Tensor cache contains no valid jobs. Cannot generate pretraining data.")
 
-# Create a mapping from tensor cache indices to environment action indices
-job_id_to_action_map = {}
-for action_idx in valid_actions:
-    job = env.candidate_jobs[action_idx]
-    job_id = job.get("_id")
-    if job_id in tensor_cache.job_ids:
-        cache_idx = tensor_cache.job_ids.index(job_id)
-        job_id_to_action_map[cache_idx] = action_idx
-        print(f"Mapped tensor cache job {job_id} (index {cache_idx}) to environment action {action_idx}")
+# Determine number of samples to generate
+num_samples_to_generate = min(num_pretraining_samples, len(valid_job_indices))
 
-print(f"Created mapping for {len(job_id_to_action_map)} jobs between tensor cache and environment")
+# Pre-calculate rewards if using cosine strategy
+if pretraining_strategy == "cosine":
+    print("Pre-calculating all cosine similarity rewards...")
+    all_rewards = tensor_cache.calculate_cosine_similarities(state)
+    if STRATEGY_CONFIG["cosine"]["scale_reward"]:
+        all_rewards = (all_rewards + 1) / 2 # Scale from [-1, 1] to [0, 1]
+    print("Cosine rewards calculated.")
+elif pretraining_strategy in ["llm", "hybrid"]:
+    raise NotImplementedError(
+        f"Pretraining strategy '{pretraining_strategy}' requires environment interaction "
+        f"(LLM calls) and cannot be generated using only the TensorCache."
+    )
+else:
+    raise ValueError(f"Unsupported pretraining strategy: {pretraining_strategy}")
 
 # Collect pretraining experiences
-samples_collected = 0
-max_attempts = min(num_pretraining_samples * 2, len(valid_job_indices))
+print(f"Generating {num_samples_to_generate} pretraining samples...")
+# Use the actual valid indices, optionally shuffle if randomness is desired
+# For simplicity, we take the first num_samples_to_generate indices
+indices_to_use = valid_job_indices[:num_samples_to_generate]
 
-for i in tqdm(range(max_attempts), desc="Generating pretraining data"):
-    if samples_collected >= num_pretraining_samples:
-        break
-        
-    cache_job_idx = valid_job_indices[i % len(valid_job_indices)]
-    if cache_job_idx not in job_id_to_action_map:
-        continue
-    
-    action_idx = job_id_to_action_map[cache_job_idx]
-    next_state, reward, done, _ = env.step(action_idx)
-    job_vector = tensor_cache.get_job_vector_by_index(cache_job_idx)
-    pretraining_data.append((state, job_vector, reward, next_state))
-    state = next_state
-    samples_collected += 1
+for cache_job_idx in tqdm(indices_to_use, desc="Generating pretraining data"):
+    # Get the Action (Job Vector) from Cache
+    action = tensor_cache.get_job_vector_by_index(cache_job_idx)
+
+    # Get the Reward (already calculated for cosine)
+    reward = all_rewards[cache_job_idx].item()
+
+    # Assemble the data point
+    pretraining_data.append((state, action, reward, next_state))
 
 print(f"Collected {len(pretraining_data)} pretraining experiences")
 
+# Check if any data was collected before stacking
+if not pretraining_data:
+    raise RuntimeError("No pretraining data was collected. Cannot proceed.")
+
 # Create tensor batches
-states = torch.stack([d[0] for d in pretraining_data])
-actions = torch.stack([d[1] for d in pretraining_data])
-rewards = torch.tensor([d[2] for d in pretraining_data], device=device)
-next_states = torch.stack([d[3] for d in pretraining_data])
+# Ensure all tensors in the list have the same shape before stacking
+try:
+    states = torch.stack([d[0] for d in pretraining_data]).to(device)
+    actions = torch.stack([d[1] for d in pretraining_data]).to(device)
+    rewards = torch.tensor([d[2] for d in pretraining_data], dtype=torch.float32, device=device)
+    next_states = torch.stack([d[3] for d in pretraining_data]).to(device)
+except RuntimeError as e:
+    print(f"Error creating tensor batches: {e}")
+    # Add more detailed logging if needed
+    # for i, d in enumerate(pretraining_data):
+    #     print(f"Data point {i}: state shape {d[0].shape}, action shape {d[1].shape}, next_state shape {d[3].shape}")
+    raise
 
 # Run pretraining using agent's built-in pretrain method
 print("Starting pretraining of neural networks")

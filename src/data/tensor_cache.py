@@ -39,8 +39,9 @@ class TensorCache:
         
         # Job data
         self.job_vectors = None     # tensor [num_jobs, embedding_dim]
-        self.job_ids = []           # list of job IDs (maps indices to IDs)
+        self.job_text_ids = []           # list of job IDs in embeddings collection 
         self.job_metadata = {}      # job_id -> metadata dict
+        self.job_embeddings_ids = []  # list of original job IDs (maps indices to IDs)
         
         # Stats for monitoring
         self.cache_hits = 0
@@ -74,7 +75,7 @@ class TensorCache:
         self.initialized = True
         self.initialization_time = time.time() - start_time
         logger.info(f"Cache initialization completed in {self.initialization_time:.2f} seconds")
-        logger.info(f"Cached {len(self.job_ids)} jobs and {len(self.applicant_states)} applicants")
+        logger.info(f"Cached {len(self.job_text_ids)} jobs and {len(self.applicant_states)} applicants")
         
         return self
     
@@ -116,10 +117,11 @@ class TensorCache:
         
         # 3. Filter for jobs with complete embeddings
         valid_jobs = []
-        self.job_ids = []
-        for job in all_jobs:
+        self.job_embeddings_ids = []
+        for job in all_jobs: # Iterating over job text collection
             job_id = str(job["_id"])
             # Find matching embedding
+            # matching_embedding will be the embedding item that corresponds to the job (text)
             matching_embedding = next((emb for emb in all_embeddings if str(emb["original_job_id"]) == job_id), None)
             
             if matching_embedding:
@@ -128,19 +130,19 @@ class TensorCache:
                     len(matching_embedding.get("tech_skills_vectors", [])) > 0 and 
                     len(matching_embedding.get("soft_skills_embeddings", [])) > 0 and
                     len(matching_embedding.get("experience_requirements_embeddings", [])) > 0):
-                    valid_jobs.append(job)
-                    self.job_ids.append(matching_embedding["original_job_id"])
+                    valid_jobs.append(job) # append the job (text info) if the embeddings are found
+                    self.job_embeddings_ids.append(matching_embedding["_id"]) # append the embedding ID
         
         logger.info(f"Found {len(valid_jobs)} jobs with complete embeddings")
         
         # 4. Store job IDs for later reference
-        self.original_job_ids = [str(job["_id"]) for job in valid_jobs]
+        self.job_text_ids = [str(job["_id"]) for job in valid_jobs]
         
         # 5. Store job metadata
         self.job_metadata = {str(job["_id"]): job for job in valid_jobs}
         
         # 6. Get and store job vectors
-        job_vectors = db_connector.get_job_vectors(self.job_ids)
+        job_vectors = db_connector.get_job_vectors(self.job_text_ids)
         self.job_vectors = torch.stack(job_vectors).to(self.device)
         logger.info(f"Created job vectors tensor with shape {self.job_vectors.shape}")
     
@@ -182,11 +184,11 @@ class TensorCache:
             raise RuntimeError("Cache not initialized, call copy_from_database first")
         
         # Determine available indices
-        available_indices = list(range(len(self.job_ids)))
+        available_indices = list(range(len(self.job_text_ids)))
         
         # Exclude specific job IDs if provided
         if exclude_ids:
-            exclude_indices = [i for i, job_id in enumerate(self.job_ids) if job_id in exclude_ids]
+            exclude_indices = [i for i, job_id in enumerate(self.job_text_ids) if job_id in exclude_ids]
             available_indices = [i for i in available_indices if i not in exclude_indices]
         
         # Sample n indices (or all if fewer than n are available)
@@ -197,7 +199,7 @@ class TensorCache:
         sampled_vectors = self.job_vectors[sampled_indices]
         
         # Get job IDs for sampled jobs
-        sampled_job_ids = [self.job_ids[i] for i in sampled_indices]
+        sampled_job_ids = [self.job_text_ids[i] for i in sampled_indices]
         
         # Get job documents for sampled jobs
         sampled_docs = []
@@ -220,11 +222,11 @@ class TensorCache:
         """
         Calculate cosine similarities between applicant state and all jobs.
         
-        This is a vectorized implementation that computes similarities for all
-        jobs in a single operation.
+        Handles potential dimension mismatch by comparing only the overlapping
+        initial dimensions (e.g., comparing applicant skills to job skills).
         
         Args:
-            applicant_state: Applicant state tensor [embedding_dim]
+            applicant_state: Applicant state tensor [state_dim]
             
         Returns:
             torch.Tensor: Cosine similarities for all jobs [num_jobs]
@@ -234,14 +236,36 @@ class TensorCache:
         
         # Ensure applicant_state is on the correct device
         applicant_state = applicant_state.to(self.device)
+        job_vectors = self.job_vectors # Shape: [num_jobs, job_dim]
         
-        # Calculate cosine similarity for all jobs at once
+        # --- Handle Dimension Mismatch --- 
+        state_dim = applicant_state.shape[0]
+        job_dim = job_vectors.shape[1]
+        
+        # Determine the dimension to use for comparison (usually the smaller one)
+        # This handles the case where job vectors might have more dimensions (e.g., title, experience)
+        # than the applicant state (e.g., just skills).
+        comparison_dim = min(state_dim, job_dim)
+        
+        if state_dim != job_dim:
+            logger.debug(f"Dimension mismatch detected: Applicant State ({state_dim}) vs Job Vectors ({job_dim}). Comparing first {comparison_dim} dimensions.")
+            # Slice both tensors to the comparison dimension
+            sliced_applicant_state = applicant_state[:comparison_dim]
+            sliced_job_vectors = job_vectors[:, :comparison_dim]
+        else:
+            # Dimensions match, use tensors as is
+            sliced_applicant_state = applicant_state
+            sliced_job_vectors = job_vectors
+        # --- End Dimension Handling ---
+            
+        # Calculate cosine similarity using the potentially sliced vectors
         # Normalize vectors
-        normalized_applicant = applicant_state / applicant_state.norm()
-        normalized_jobs = self.job_vectors / self.job_vectors.norm(dim=1, keepdim=True)
+        normalized_applicant = sliced_applicant_state / (sliced_applicant_state.norm() + 1e-8) # Add epsilon for numerical stability
+        normalized_jobs = sliced_job_vectors / (sliced_job_vectors.norm(dim=1, keepdim=True) + 1e-8) # Add epsilon
         
         # Calculate dot product of normalized vectors (which equals cosine similarity)
-        similarities = torch.matmul(normalized_jobs, normalized_applicant)
+        # Ensure normalized_applicant is treated as a column vector for matmul
+        similarities = torch.matmul(normalized_jobs, normalized_applicant.unsqueeze(1)).squeeze() 
         
         return similarities
     
@@ -262,7 +286,7 @@ class TensorCache:
             raise RuntimeError("Cache not initialized, call copy_from_database first")
         
         try:
-            idx = self.job_ids.index(job_id)
+            idx = self.job_text_ids.index(job_id)
             self.cache_hits += 1
             return self.job_vectors[idx]
         except ValueError:
@@ -299,7 +323,7 @@ class TensorCache:
         if not self.initialized:
             raise RuntimeError("Cache not initialized, call copy_from_database first")
         
-        return list(range(len(self.job_ids)))
+        return list(range(len(self.job_text_ids)))
     
     def get_job_id(self, index):
         """
@@ -317,10 +341,10 @@ class TensorCache:
         if not self.initialized:
             raise RuntimeError("Cache not initialized, call copy_from_database first")
         
-        if index < 0 or index >= len(self.job_ids):
-            raise IndexError(f"Job index {index} out of range (0-{len(self.job_ids)-1})")
+        if index < 0 or index >= len(self.job_text_ids):
+            raise IndexError(f"Job index {index} out of range (0-{len(self.job_text_ids)-1})")
         
-        return self.job_ids[index]
+        return self.job_text_ids[index]
     
     def get_job_vector_by_index(self, index):
         """
@@ -338,8 +362,8 @@ class TensorCache:
         if not self.initialized:
             raise RuntimeError("Cache not initialized, call copy_from_database first")
         
-        if index < 0 or index >= len(self.job_ids):
-            raise IndexError(f"Job index {index} out of range (0-{len(self.job_ids)-1})")
+        if index < 0 or index >= len(self.job_text_ids):
+            raise IndexError(f"Job index {index} out of range (0-{len(self.job_text_ids)-1})")
         
         self.cache_hits += 1
         return self.job_vectors[index]
@@ -357,7 +381,7 @@ class TensorCache:
         if self.job_vectors is not None:
             self.job_vectors = None
         
-        self.job_ids = []
+        self.job_text_ids = []
         self.job_metadata = {}
         
         # Reset stats
@@ -369,12 +393,12 @@ class TensorCache:
     
     def __len__(self):
         """Return the number of cached jobs."""
-        return len(self.job_ids)
+        return len(self.job_text_ids)
     
     def cache_stats(self):
         """Return cache statistics."""
         return {
-            "job_count": len(self.job_ids),
+            "job_count": len(self.job_text_ids),
             "applicant_count": len(self.applicant_states),
             "hits": self.cache_hits,
             "misses": self.cache_misses,

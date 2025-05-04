@@ -159,7 +159,7 @@ class DatabaseConnector:
                 return False
             
             # Check for required fields according to documentation
-            required_fields = ["job_title_embeddings", "tech_skills_vectors", "soft_skills_embeddings"]
+            required_fields = ["job_title_embeddings", "tech_skills_vectors", "soft_skills_embeddings", "experience_requirements_embeddings"]
             
             for field in required_fields:
                 if field not in job_doc or not job_doc[field] or len(job_doc[field]) == 0:
