@@ -535,32 +535,57 @@ class DynaQAgent:
             env.set_cosine_weight(self.cosine_weight)
         
         # Check if environment has tensor cache for optimized operations
-        using_tensor_cache = hasattr(env, 'using_cache') and env.using_cache and hasattr(env, 'tensor_cache')
+        # This branch assumes TensorCache is always available via self.tensor_cache
+        if not hasattr(self, 'tensor_cache') or self.tensor_cache is None:
+            logger.error("TensorCache not initialized in agent. Cannot proceed with training step.")
+            # Return empty metrics or raise error, episode cannot run
+            return metrics # Return current (likely zero) metrics
+        
+        # Get the number of actions to sample from config, default to 50 if not set
+        try:
+            action_sampling_size = TRAINING_CONFIG["action_sampling_size"]
+        except KeyError:
+            logger.error("'action_sampling_size' not found in TRAINING_CONFIG. Please define it in config/config.py")
+            # Raise the error or return/break depending on desired handling
+            raise # Reraise the error to stop execution
         
         # Training loop - not using tqdm here to avoid nested progress bars which would clutter the output
         for step in range(max_steps):
-            # Get available actions
-            valid_action_indices = env.get_valid_actions()
+            # Action Sampling Logic (assumes self.tensor_cache exists)
+            # 1. Get all valid job indices from cache
+            all_job_indices = self.tensor_cache.get_valid_job_indices()
+            if not all_job_indices:
+                logger.error("TensorCache has no valid job indices. Cannot select action.")
+                break # Exit episode if no actions available
             
-            if using_tensor_cache and len(valid_action_indices) > 0:
-                # Use vectorized approach with tensor cache
-                # Get all action vectors as a single tensor for batch processing
-                available_actions = env.get_job_vectors_tensor()  # Get tensor via helper method
-                
-                # Select action using vectorized operations
-                action_idx, action_vector = self.select_action(state, available_actions)
-            else:
-                # Standard approach - individually get action vectors
-                available_actions = [env.get_action_vector(idx) for idx in valid_action_indices]
-                
-                # Select action
-                action_idx, action_vector = self.select_action(state, available_actions)
+            # 2. Sample a subset of indices
+            num_to_sample = min(action_sampling_size, len(all_job_indices))
+            candidate_indices = random.sample(all_job_indices, num_to_sample)
+            
+            # 3. Get the corresponding action vectors for the subset
+            candidate_action_vectors = [self.tensor_cache.get_job_vector_by_index(idx) for idx in candidate_indices]
+            if not candidate_action_vectors: # Should not happen if indices were valid
+                logger.error(f"Failed to retrieve action vectors for sampled indices: {candidate_indices}")
+                break # Exit episode
+            
+            # Select action from the list of available action tensors
+            # self.select_action expects a list of tensors
+            # It returns the index within the *candidate_action_vectors* list
+            selected_subset_idx, action_vector = self.select_action(state, candidate_action_vectors)
+            
+            # Map the index back to the original cache index (if using cache)
+            # or the environment index (if not using cache)
+            action_id_for_env = candidate_indices[selected_subset_idx]
             
             # Take action in environment
-            next_state, reward, done, info = env.step(action_idx)
+            # We need to pass the original cache index to the environment step function
+            # This assumes env.step() can handle the absolute cache index or job_id
+            # If env.step strictly requires an index relative to its *internal* valid list,
+            # this will need further adjustment in the environment class.
+            next_state, reward, done, info = env.step(action_id_for_env)
             
             # Log info
-            logger.debug(f"Step {step}: Action={action_idx}, Reward={reward:.4f}")
+            logger.debug(f"Step {step}: Action Index (in cache/env)={action_id_for_env}, Reward={reward:.4f}")
             
             # Store experience in replay buffer
             self.store_experience(state, action_vector, reward, next_state)

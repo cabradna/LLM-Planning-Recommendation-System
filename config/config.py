@@ -74,7 +74,7 @@ TRAINING_CONFIG = {
     "epsilon_decay": 0.995,  # Decay rate for exploration
     
     # Buffer parameters
-    "replay_buffer_size": 100000,  # Maximum replay buffer size
+    "replay_buffer_size": 10000,  # Maximum replay buffer size
     "min_replay_buffer_size": 1000,  # Minimum buffer size before training starts
 
     # Training process
@@ -96,7 +96,9 @@ TRAINING_CONFIG = {
     "random_seed": 42,  # Random seed for reproducibility
     
     # Hardware settings
-    "device": torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    "device": torch.device("cuda" if torch.cuda.is_available() else "cpu"),
+
+    "action_sampling_size": 100,  # Number of actions (jobs) to sample at each step
 }
 
 # Pretraining Configuration

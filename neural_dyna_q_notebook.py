@@ -478,63 +478,58 @@ num_pretraining_samples = TRAINING_CONFIG["pretraining"]["num_samples"]
 num_pretraining_epochs = TRAINING_CONFIG["pretraining"]["num_epochs"]
 batch_size = TRAINING_CONFIG["batch_size"]
 
-# Use the configured reward strategy for pretraining
-pretraining_strategy = reward_strategy
+# Force cosine strategy for pretraining, regardless of main strategy
+pretraining_strategy = "cosine" 
 
 print(f"Starting pretraining with {pretraining_strategy} strategy...")
 
-# Generate pretraining data directly using tensor cache
-print("Generating pretraining data using tensor cache only")
+# Generate pretraining data
+print("Generating pretraining data...")
 pretraining_data = []
 
 # Get applicant state from cache
 try:
-    state = tensor_cache.get_applicant_state(target_candidate_id)
-    next_state = state # Assuming static state for pretraining
+    initial_state_tensor = tensor_cache.get_applicant_state(target_candidate_id)
 except KeyError as e:
     print(f"Error: {e}. Applicant not found in cache. Cannot proceed with pretraining.")
     raise
 
 # Get valid job indices from tensor cache
 valid_job_indices = tensor_cache.get_valid_job_indices()
-print(f"Using {len(valid_job_indices)} valid jobs from tensor cache for pretraining")
+print(f"Found {len(valid_job_indices)} valid jobs in tensor cache")
 
 if not valid_job_indices:
     raise ValueError("Tensor cache contains no valid jobs. Cannot generate pretraining data.")
 
 # Determine number of samples to generate
 num_samples_to_generate = min(num_pretraining_samples, len(valid_job_indices))
+indices_to_use = valid_job_indices[:num_samples_to_generate] # Use the first N valid indices
 
-# Pre-calculate rewards if using cosine strategy
 if pretraining_strategy == "cosine":
+    print("Using tensor cache only for cosine strategy.")
+    # Pre-calculate all cosine similarity rewards
     print("Pre-calculating all cosine similarity rewards...")
-    all_rewards = tensor_cache.calculate_cosine_similarities(state)
+    all_rewards = tensor_cache.calculate_cosine_similarities(initial_state_tensor)
     if STRATEGY_CONFIG["cosine"]["scale_reward"]:
         all_rewards = (all_rewards + 1) / 2 # Scale from [-1, 1] to [0, 1]
     print("Cosine rewards calculated.")
-elif pretraining_strategy in ["llm", "hybrid"]:
-    raise NotImplementedError(
-        f"Pretraining strategy '{pretraining_strategy}' requires environment interaction "
-        f"(LLM calls) and cannot be generated using only the TensorCache."
-    )
+    
+    # Collect pretraining experiences using cache
+    print(f"Generating {num_samples_to_generate} samples using cache...")
+    for cache_job_idx in tqdm(indices_to_use, desc="Generating pretraining data (cosine)"):
+        action_tensor = tensor_cache.get_job_vector_by_index(cache_job_idx)
+        reward = all_rewards[cache_job_idx].item()
+        # Assuming static state for pretraining
+        next_state_tensor = initial_state_tensor 
+        pretraining_data.append((initial_state_tensor, action_tensor, reward, next_state_tensor))
+
+# This part should now NOT be reached if pretraining_strategy is forced to 'cosine'
+# elif pretraining_strategy in ["llm", "hybrid"]:
+#     print(f"Using environment interaction for {pretraining_strategy} strategy.")
+#     # ... (code for env interaction - removed for clarity as it's not used now)
 else:
+    # This handles the case where pretraining_strategy is somehow not 'cosine'
     raise ValueError(f"Unsupported pretraining strategy: {pretraining_strategy}")
-
-# Collect pretraining experiences
-print(f"Generating {num_samples_to_generate} pretraining samples...")
-# Use the actual valid indices, optionally shuffle if randomness is desired
-# For simplicity, we take the first num_samples_to_generate indices
-indices_to_use = valid_job_indices[:num_samples_to_generate]
-
-for cache_job_idx in tqdm(indices_to_use, desc="Generating pretraining data"):
-    # Get the Action (Job Vector) from Cache
-    action = tensor_cache.get_job_vector_by_index(cache_job_idx)
-
-    # Get the Reward (already calculated for cosine)
-    reward = all_rewards[cache_job_idx].item()
-
-    # Assemble the data point
-    pretraining_data.append((state, action, reward, next_state))
 
 print(f"Collected {len(pretraining_data)} pretraining experiences")
 
