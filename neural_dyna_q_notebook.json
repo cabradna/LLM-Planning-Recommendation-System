@@ -339,7 +339,7 @@
                 "            db_connector=db_connector,\n",
                 "            tensor_cache=tensor_cache,\n",
                 "            reward_scheme=STRATEGY_CONFIG[\"llm\"][\"response_mapping\"],\n",
-                "            cosine_weight=STRATEGY_CONFIG[\"hybrid\"][\"cosine_weight_start\"],\n",
+                "            cosine_weight=STRATEGY_CONFIG[\"hybrid\"][\"initial_cosine_weight\"],\n",
                 "            random_seed=ENV_CONFIG[\"random_seed\"]\n",
                 "        )\n",
                 "    else:\n",

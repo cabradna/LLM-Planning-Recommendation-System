@@ -51,7 +51,8 @@ from pathlib import Path
 
 # Configuration settings for the setup process, particularly for Colab environments.
 SETUP_PATH_CONFIG = {
-    "repo_url": "https://github.com/cabradna/LLM-Planning-Recommendation-System.git"  # URL of the repository to clone.
+    "repo_url": "https://github.com/cabradna/LLM-Planning-Recommendation-System.git",  # URL of the repository to clone.
+    "branch": "local_tensors"  # Specific branch to use for tensor-based implementation
 }
 
 # Configuration for enabling specific strategies during setup (e.g., LLM, hybrid).
@@ -80,6 +81,11 @@ if IN_COLAB:
         if cloned_repo_path.is_dir():
             os.chdir(cloned_repo_path)
             print(f"Changed directory to: {os.getcwd()}")
+            
+            # Checkout the specific branch
+            branch = SETUP_PATH_CONFIG["branch"]
+            print(f"Checking out branch: {branch}")
+            subprocess.run(["git", "checkout", branch], check=True)
         else:
             raise FileNotFoundError(f"Cloned repository directory '{repo_name}' not found or is not a directory.")
 
@@ -132,6 +138,16 @@ else:
     if str(project_root) not in sys.path:
         sys.path.insert(0, str(project_root))
         print(f"Added {project_root} to sys.path for local execution.")
+        
+    # Verify we're on the correct branch
+    try:
+        result = subprocess.run(["git", "branch", "--show-current"], capture_output=True, text=True)
+        current_branch = result.stdout.strip()
+        if current_branch != SETUP_PATH_CONFIG["branch"]:
+            print(f"Warning: Current branch is '{current_branch}', but code expects '{SETUP_PATH_CONFIG['branch']}'")
+            print("Please switch to the correct branch for this implementation.")
+    except Exception as e:
+        print(f"Warning: Could not verify git branch: {e}")
 
 
 # %%
@@ -344,7 +360,7 @@ if CACHE_CONFIG["enabled"]:
             db_connector=db_connector,
             tensor_cache=tensor_cache,
             reward_scheme=STRATEGY_CONFIG["llm"]["response_mapping"],
-            cosine_weight=STRATEGY_CONFIG["hybrid"]["cosine_weight_start"],
+            cosine_weight=STRATEGY_CONFIG["hybrid"]["initial_cosine_weight"],
             random_seed=ENV_CONFIG["random_seed"]
         )
     else:
@@ -370,7 +386,7 @@ else:
         env = HybridEnv(
             db_connector=db_connector,
             reward_scheme=STRATEGY_CONFIG["llm"]["response_mapping"],
-            cosine_weight=STRATEGY_CONFIG["hybrid"]["cosine_weight_start"],
+            cosine_weight=STRATEGY_CONFIG["hybrid"]["initial_cosine_weight"],
             random_seed=ENV_CONFIG["random_seed"]
         )
     else:
@@ -404,7 +420,8 @@ agent = DynaQAgent(
     world_model=world_model,
     training_strategy=reward_strategy,
     device=device,
-    target_applicant_id=target_candidate_id
+    target_applicant_id=target_candidate_id,
+    tensor_cache=tensor_cache
 )
 
 # Initialize Visualizer
@@ -430,6 +447,7 @@ print(f"Environment initialized with {reward_strategy} reward strategy.")
 # Note: This section will only execute if we're using an LLM-based strategy and running in a Colab environment with sufficient resources.
 
 # %%
+# Set up LLM in the environment for reward calculation
 if STRATEGY_CONFIG["llm"]["enabled"] and IN_COLAB:
     try:
         from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
@@ -476,13 +494,44 @@ if STRATEGY_CONFIG["llm"]["enabled"] and IN_COLAB:
         
         print(f"LLM model loaded successfully.")
         
-        # Set up LLM in the environment for reward calculation and capture returned environment
-        # setup_llm may return a new environment instance if current one doesn't support LLM
-        env = env.setup_llm(llm_model, tokenizer)
+        # Create a new environment with LLM capabilities if needed
+        if reward_strategy in ["llm", "hybrid"]:
+            if not isinstance(env, (LLMSimulatorEnv, HybridEnv)):
+                print(f"Recreating environment with {reward_strategy} strategy and LLM support")
+                
+                if reward_strategy == "llm":
+                    env = LLMSimulatorEnv(
+                        db_connector=db_connector,
+                        tensor_cache=tensor_cache,  # Pass tensor cache to new env
+                        reward_scheme=STRATEGY_CONFIG["llm"]["response_mapping"],
+                        random_seed=ENV_CONFIG["random_seed"],
+                        llm_model=llm_model,
+                        tokenizer=tokenizer
+                    )
+                else:  # hybrid
+                    env = HybridEnv(
+                        db_connector=db_connector,
+                        tensor_cache=tensor_cache,  # Pass tensor cache to new env
+                        reward_scheme=STRATEGY_CONFIG["llm"]["response_mapping"],
+                        cosine_weight=STRATEGY_CONFIG["hybrid"]["initial_cosine_weight"],
+                        random_seed=ENV_CONFIG["random_seed"],
+                        llm_model=llm_model,
+                        tokenizer=tokenizer
+                    )
+                    
+                # Reset with the target candidate
+                env.reset(applicant_id=target_candidate_id)
+            else:
+                # Just set the LLM in the existing environment
+                env.set_llm(llm_model, tokenizer)
+                print(f"Added LLM to existing {reward_strategy} environment")
     except Exception as e:
         print(f"Error loading LLM: {e}")
         print("Switching to cosine similarity reward strategy.")
-        env.reward_strategy = "cosine"
+        if hasattr(env, 'reward_strategy'):
+            env.reward_strategy = "cosine"
+        if hasattr(env, 'cosine_weight') and reward_strategy == "hybrid":
+            env.cosine_weight = 1.0  # Full weight to cosine similarity
 
 # %% [markdown]
 # ## 8. Training Setup
@@ -495,18 +544,20 @@ if STRATEGY_CONFIG["llm"]["enabled"] and IN_COLAB:
 # 4. Model checkpointing
 
 # %%
-# Initialize the DynaQAgent with all required components
-agent = DynaQAgent(
-    state_dim=MODEL_CONFIG["q_network"]["state_dim"],
-    action_dim=MODEL_CONFIG["q_network"]["action_dim"],
-    q_network=q_network,
-    world_model=world_model,
-    training_strategy=reward_strategy,
-    device=device,
-    target_applicant_id=target_candidate_id
-)
+# Verify the agent is properly set up
+print(f"Agent device: {agent.device}")
+print(f"Training strategy: {agent.training_strategy}")
+print(f"Q-Network parameters: {sum(p.numel() for p in agent.q_network.parameters() if p.requires_grad):,}")
+print(f"World Model parameters: {sum(p.numel() for p in agent.world_model.parameters() if p.requires_grad):,}")
+print(f"Planning steps: {TRAINING_CONFIG['planning_steps']}")
+print(f"Batch size: {TRAINING_CONFIG['batch_size']}")
 
-print("Dyna-Q agent initialized successfully.")
+# Configure any additional training parameters
+agent.planning_steps = TRAINING_CONFIG['planning_steps']
+agent.batch_size = TRAINING_CONFIG['batch_size']
+agent.gamma = TRAINING_CONFIG['gamma']
+
+print("Training setup completed successfully.")
 
 # %% [markdown]
 # ## 9. Pretraining Phase
@@ -519,20 +570,25 @@ print("Dyna-Q agent initialized successfully.")
 
 # %%
 # Define pretraining parameters from config
-num_pretraining_samples = min(TRAINING_CONFIG["pretraining"]["num_samples"], len(job_ids))
 num_pretraining_epochs = TRAINING_CONFIG["pretraining"]["num_epochs"]
 batch_size = TRAINING_CONFIG["batch_size"]
 
 print(f"Starting pretraining with {reward_strategy} strategy...")
 
-# Generate pretraining data
+# Generate pretraining data using tensor cache
 pretraining_data = []
 state = env.reset(applicant_id=target_candidate_id)
 
+# Get valid job indices from tensor cache
+valid_job_indices = tensor_cache.get_valid_job_indices()
+num_pretraining_samples = min(TRAINING_CONFIG["pretraining"]["num_samples"], len(valid_job_indices))
+print(f"Using {len(valid_job_indices)} valid jobs from tensor cache for pretraining")
+
 for i in tqdm(range(num_pretraining_samples), desc="Generating pretraining data"):
-    job_idx = i % len(job_ids)
-    job_id = job_ids[job_idx]
-    job_vector = job_vectors_np[job_idx]
+    job_idx = valid_job_indices[i % len(valid_job_indices)]
+    
+    # Get job vector from tensor cache
+    job_vector = tensor_cache.get_job_vector(job_idx).cpu().numpy()
     
     next_state, reward, done, _ = env.step(job_idx)
     pretraining_data.append((state, job_vector, reward, next_state))
@@ -635,7 +691,8 @@ for exp_idx in range(num_experiments):
             world_model=world_model,
             training_strategy=reward_strategy,
             device=device,
-            target_applicant_id=target_candidate_id
+            target_applicant_id=target_candidate_id,
+            tensor_cache=tensor_cache
         )
     
     # Run training for this experiment
@@ -761,7 +818,8 @@ baseline_agent = DynaQAgent(
     state_dim=MODEL_CONFIG["q_network"]["state_dim"],
     action_dim=MODEL_CONFIG["q_network"]["action_dim"],
     training_strategy=baseline_strategy,
-    device=device
+    device=device,
+    tensor_cache=tensor_cache  # Include tensor_cache
 )
 
 # Use evaluator's compare_agents method which internally calls evaluate_agent
@@ -808,38 +866,39 @@ test_epsilon = 0.0  # No exploration during testing (pure exploitation)
 recommended_jobs = []
 recommendation_scores = []
 
-# Make a copy of job data for testing
-test_job_ids = job_ids.copy()
-test_job_vectors = job_vectors_np.copy()
+# Get all valid job indices from tensor cache
+valid_job_indices = tensor_cache.get_valid_job_indices()
+print(f"Found {len(valid_job_indices)} valid jobs in tensor cache for recommendations")
 
 # Reset the environment to get the initial state
 state = env.reset(applicant_id=target_candidate_id)
 
+# Create a copy of job indices to work with
+remaining_job_indices = valid_job_indices.copy()
+
 # Generate top-K recommendations
-for _ in range(num_recommendations):
-    # Convert job vectors to tensor format
-    action_tensors = [torch.from_numpy(vector).float() for vector in test_job_vectors]
+for _ in range(min(num_recommendations, len(valid_job_indices))):
+    # Get job tensors for remaining indices
+    action_tensors = [tensor_cache.get_job_vector(idx) for idx in remaining_job_indices]
     
     # Select best job according to Q-network
     action_idx, _ = agent.select_action(state, action_tensors, eval_mode=True)
     
-    # Get the corresponding job_id and job_vector
-    job_id = test_job_ids[action_idx]
-    job_vector = test_job_vectors[action_idx]
+    # Get the corresponding job_id
+    selected_idx = remaining_job_indices[action_idx]
+    job_id = tensor_cache.get_job_id(selected_idx)
     
     # Calculate Q-value for logging
     with torch.no_grad():
-        q_value = agent.q_network(
-            torch.tensor(state, device=device).unsqueeze(0),
-            torch.from_numpy(job_vector).float().to(device).unsqueeze(0)
-        ).item()
+        state_tensor = torch.tensor(state, device=device).unsqueeze(0)
+        job_tensor = tensor_cache.get_job_vector(selected_idx).unsqueeze(0)
+        q_value = agent.q_network(state_tensor, job_tensor).item()
     
     recommended_jobs.append(job_id)
     recommendation_scores.append(q_value)
     
     # Remove selected job from consideration for next selection
-    test_job_ids.pop(action_idx)
-    test_job_vectors = np.delete(test_job_vectors, action_idx, axis=0)
+    remaining_job_indices.pop(action_idx)
 
 # Display recommendations with details
 print("\n=== Top Job Recommendations ===\n")
@@ -893,4 +952,15 @@ for i, (job_id, score) in enumerate(zip(recommended_jobs, recommendation_scores)
 # Clean up resources
 db_connector.close()
 print("Database connection closed.")
+
+# Free up GPU memory
+if tensor_cache is not None and hasattr(tensor_cache, 'clear'):
+    tensor_cache.clear()
+    print("Tensor cache cleared.")
+    
+# Free PyTorch memory
+if torch.cuda.is_available():
+    torch.cuda.empty_cache()
+    print("CUDA cache emptied.")
+    
 print("Notebook execution complete.")
