@@ -81,7 +81,7 @@ TRAINING_CONFIG = {
     "num_episodes": 100,  # Number of episodes
     "max_steps_per_episode": 100,  # Maximum steps per episode
     "eval_frequency": 10,  # Evaluation frequency (episodes)
-    "save_frequency": 1000,  # Model saving frequency (episodes)
+    "save_frequency": 10,  # Model saving frequency (episodes)
 
     # Data parameters
     "num_jobs": 100,  # Number of jobs to sample
