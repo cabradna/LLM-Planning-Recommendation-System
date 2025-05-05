@@ -682,6 +682,7 @@ class LLMSimulatorEnv(JobRecommendationEnv):
     def _build_llm_prompt(self, applicant_bio: str, applicant_resume: str, job_title: str, job_description: str) -> str:
         """
         Build a prompt for the LLM to simulate user response.
+        Uses [INST] tokens and emphasizes single-word output.
         
         Args:
             applicant_bio: Applicant bio.
@@ -692,30 +693,30 @@ class LLMSimulatorEnv(JobRecommendationEnv):
         Returns:
             str: Prompt for the LLM.
         """
-        return f"""
-You are simulating a job seeker's response to a job recommendation.
+        # Use f-string for cleaner formatting and ensure no leading/trailing whitespace issues
+        # Added [INST] and [/INST] markers around the instruction part.
+        # Made the final instruction more direct and demanding.
+        prompt = f"""<s>[INST] You are simulating a job seeker's response to a job recommendation.
 
 JOB SEEKER PROFILE:
-{applicant_bio}
+{applicant_bio.strip()}
 
 RESUME:
-{applicant_resume}
+{applicant_resume.strip()}
 
 JOB RECOMMENDATION:
-Title: {job_title}
-
+Title: {job_title.strip()}
 Description:
-{job_description}
+{job_description.strip()}
 
-Based on the match between the job seeker's profile and the job recommendation,
-how would the job seeker respond? Choose ONE of the following options:
+Based on the match between the job seeker's profile and the job recommendation, how would the job seeker respond? Choose ONLY ONE of the following four options:
 - APPLY (The job seeker would submit an application for this position)
 - SAVE (The job seeker would save this job for later consideration)
 - CLICK (The job seeker would click to view more details)
 - IGNORE (The job seeker would ignore this recommendation)
 
-Provide your answer as a single word: APPLY, SAVE, CLICK, or IGNORE.
-"""
+Your response MUST be a single word: APPLY, SAVE, CLICK, or IGNORE. Do not add any explanation or other text. [/INST]"""
+        return prompt # Return the raw prompt string
     
     def _get_llm_decision(self, prompt: str) -> str:
         """
@@ -731,6 +732,7 @@ Provide your answer as a single word: APPLY, SAVE, CLICK, or IGNORE.
             Exception: Any errors during LLM processing are propagated up
         """
         # Tokenize the prompt (creates tensors on CPU by default)
+        # Pass the raw prompt string directly to the tokenizer
         inputs = self.tokenizer(prompt, return_tensors="pt") 
 
         # --- Move input tensors to the LLM's primary device --- 
@@ -750,50 +752,80 @@ Provide your answer as a single word: APPLY, SAVE, CLICK, or IGNORE.
 
         # Generate response
         with torch.no_grad():
+            # Pass input_ids and attention_mask directly if they exist in inputs
+            generate_kwargs = {}
+            if "input_ids" in inputs:
+                generate_kwargs["input_ids"] = inputs["input_ids"]
+            if "attention_mask" in inputs:
+                generate_kwargs["attention_mask"] = inputs["attention_mask"]
+                
+            # If kwargs are empty, fall back to passing the whole dict (original behavior)
+            if not generate_kwargs:
+                 generate_kwargs = inputs
+
             outputs = self.llm_model.generate(
-                **inputs,
-                max_new_tokens=50,
-                temperature=0.2, # Keep temp low
-                do_sample=False, # CHANGE: Use greedy decoding
+                **generate_kwargs,
+                max_new_tokens=10, # CHANGE: Drastically reduced max_new_tokens
+                temperature=0.2, # CHANGE: Slightly lower temperature
+                do_sample=False, # Keep greedy decoding
                 pad_token_id=self.tokenizer.eos_token_id # Ensure pad token is set
             )
         
-        # Decode the response
-        response = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
+        # Decode the response, focusing only on the generated part
+        # outputs[0] usually contains the full sequence (prompt + generation)
+        # We need to slice it based on the input length
+        input_length = inputs["input_ids"].shape[1] if "input_ids" in inputs else 0
+        generated_tokens = outputs[0][input_length:]
+        response_only = self.tokenizer.decode(generated_tokens, skip_special_tokens=True).strip()
         
-        # Extract the part after the prompt
-        response_only = response[len(prompt):].strip()
+        # Log the raw generated output for debugging
+        logger.debug(f"LLM Raw Output: '{response_only}'")
         
         return response_only
     
     def _map_llm_response(self, response: str) -> str:
         """
         Map the LLM response to a predefined response type.
+        Searches for keywords within the response string.
         Falls back to IGNORE if mapping is unclear.
         
         Args:
-            response: LLM response text.
+            response: LLM response text (should ideally be just the keyword).
             
         Returns:
             str: Mapped response type ('APPLY', 'SAVE', 'CLICK', 'IGNORE').
-            
-        Raises:
-            ValueError: If the LLM response cannot be mapped to a valid response type
         """
-        response_lower = response.lower()
-        
-        if "apply" in response_lower:
+        # CHANGE: Process the response directly, don't assume prompt slicing worked perfectly.
+        # Make comparison case-insensitive and check if keyword *is* the response, 
+        # or if it's *contained* within a short response (allowing for minor variations).
+        response_lower = response.lower().strip()
+        response_len = len(response_lower)
+
+        # Prioritize exact matches first
+        if response_lower == "apply":
             return "APPLY"
-        elif "save" in response_lower:
+        elif response_lower == "save":
             return "SAVE"
-        elif "click" in response_lower:
+        elif response_lower == "click":
             return "CLICK"
-        elif "ignore" in response_lower:
+        elif response_lower == "ignore":
             return "IGNORE"
-        else:
-            # CHANGE: Log warning and default to IGNORE instead of raising error
-            logger.warning(f"Unclear LLM response: '{response}'. Defaulting to IGNORE.")
-            return "IGNORE"
+            
+        # If not exact, check containment within a reasonably short string
+        # (helps catch minor variations like "APPLY." or extra spaces)
+        elif response_len < 20: 
+            if "apply" in response_lower:
+                return "APPLY"
+            elif "save" in response_lower:
+                return "SAVE"
+            elif "click" in response_lower:
+                return "CLICK"
+            elif "ignore" in response_lower:
+                return "IGNORE"
+
+        # If still no match, log warning and default to IGNORE
+        logger.warning(f"Unclear LLM response: '{response}'. Defaulting to IGNORE.")
+        return "IGNORE"
 
 
 class HybridEnv(LLMSimulatorEnv):
