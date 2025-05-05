@@ -731,7 +731,7 @@ Provide your answer as a single word: APPLY, SAVE, CLICK, or IGNORE.
             Exception: Any errors during LLM processing are propagated up
         """
         # Tokenize the prompt
-        inputs = self.tokenizer(prompt, return_tensors="pt").to(self.device)
+        inputs = self.tokenizer(prompt, return_tensors="pt")
         
         # Generate response
         with torch.no_grad():
