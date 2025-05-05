@@ -719,7 +719,7 @@ Provide your answer as a single word: APPLY, SAVE, CLICK, or IGNORE.
     
     def _get_llm_decision(self, prompt: str) -> str:
         """
-        Get a decision from the LLM.
+        Get a decision from the LLM, ensuring input tensors are on the correct device.
         
         Args:
             prompt: Prompt for the LLM.
@@ -730,9 +730,24 @@ Provide your answer as a single word: APPLY, SAVE, CLICK, or IGNORE.
         Raises:
             Exception: Any errors during LLM processing are propagated up
         """
-        # Tokenize the prompt
-        inputs = self.tokenizer(prompt, return_tensors="pt")
-        
+        # Tokenize the prompt (creates tensors on CPU by default)
+        inputs = self.tokenizer(prompt, return_tensors="pt") 
+
+        # --- Move input tensors to the LLM's primary device --- 
+        try:
+            # Determine the target device from the LLM model itself
+            # This handles models loaded with device_map="auto"
+            model_device = self.llm_model.device 
+            # Move all tensors in the inputs dictionary to the model's device
+            inputs = {key: tensor.to(model_device) for key, tensor in inputs.items()}
+            logger.debug(f"Moved tokenizer inputs to device: {model_device}")
+        except Exception as e:
+            # Fallback or error handling if device determination/moving fails
+            logger.error(f"Could not move inputs to model device: {e}. Using environment device: {self.device}")
+            # As a fallback, try the environment's device (might still cause issues)
+            inputs = {key: tensor.to(self.device) for key, tensor in inputs.items()}
+        # --- End device move --- 
+
         # Generate response
         with torch.no_grad():
             outputs = self.llm_model.generate(
