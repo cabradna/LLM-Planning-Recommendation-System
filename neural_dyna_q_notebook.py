@@ -165,10 +165,13 @@ from pathlib import Path
 import logging
 from config.config import PATH_CONFIG # Assuming PATH_CONFIG is defined here
 
+# Define log levels
+file_log_level = logging.DEBUG  # Always log DEBUG and above to file
+initial_stream_log_level = logging.INFO # Initial level for notebook output
+
 # Ensure log directory exists
 log_dir = PATH_CONFIG.get("log_dir", "logs") # Default to ./logs if not in config
 if not os.path.isabs(log_dir):
-    # If relative path, assume relative to project root (modify if needed)
     try:
         project_root_for_log = Path(__file__).resolve().parent.parent
     except NameError:
@@ -177,33 +180,42 @@ if not os.path.isabs(log_dir):
 os.makedirs(log_dir, exist_ok=True)
 log_file_path = os.path.join(log_dir, 'notebook_run.log')
 
-# Get root logger and set level
-# Set level to INFO to see INFO, WARNING, ERROR, CRITICAL
-# Set level to DEBUG to see everything
-log_level = logging.INFO # Or logging.DEBUG for more verbosity
-logger = logging.getLogger() 
-logger.setLevel(log_level)
+# Get root logger and set level to lowest required (DEBUG)
+logger = logging.getLogger()
+logger.setLevel(logging.DEBUG) # Allow all messages >= DEBUG through the root logger
 
-# Remove existing handlers if any (to avoid duplicates, optional)
-# for handler in logger.handlers[:]:
-#    logger.removeHandler(handler)
+# Remove existing handlers from previous runs (if any)
+# This is important if re-running this cell in the notebook
+for handler in logger.handlers[:]:
+   logger.removeHandler(handler)
 
 # Create formatter
 log_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
-# Create File Handler
+# Create File Handler (Level: DEBUG)
 file_handler = logging.FileHandler(log_file_path, mode='w') # 'w' to overwrite each run
 file_handler.setFormatter(log_formatter)
-file_handler.setLevel(log_level)
+file_handler.setLevel(file_log_level) # Log DEBUG and up to the file
 logger.addHandler(file_handler)
 
-# Create Stream Handler (for notebook output)
+# Create Stream Handler (Level: INFO initially)
+# Store the handler instance in a variable so its level can be changed later
 stream_handler = logging.StreamHandler(sys.stdout)
 stream_handler.setFormatter(log_formatter)
-stream_handler.setLevel(log_level)
+stream_handler.setLevel(initial_stream_log_level) # Log INFO and up to the console/notebook
 logger.addHandler(stream_handler)
 
-logger.info(f"Logging configured. Level: {logging.getLevelName(log_level)}. File: {log_file_path}")
+logger.info(f"Logging configured. Root Level: DEBUG. File Level: {logging.getLevelName(file_log_level)}. Stream Level: {logging.getLevelName(initial_stream_log_level)}. File: {log_file_path}")
+logger.debug("DEBUG logging is enabled for the root logger and file handler.") # This will appear in file only (unless stream level is changed)
+
+# --- How to change Stream Handler level later --- 
+# In a later cell, to see DEBUG messages in notebook output:
+# stream_handler.setLevel(logging.DEBUG)
+# logger.info("--- Changed Stream Handler level to DEBUG ---")
+
+# To switch Stream Handler back to INFO:
+# stream_handler.setLevel(logging.INFO)
+# logger.info("--- Changed Stream Handler level back to INFO ---")
 # --- End Logging Configuration ---
 
 # Dynamically add the project root to the Python path
