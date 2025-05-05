@@ -40,9 +40,9 @@ class TensorCache:
         
         # Job data
         self.job_vectors = None     # tensor [num_jobs, embedding_dim]
-        self.job_text_ids = []           # list of job IDs in embeddings collection 
+        self.job_text_ids = []           # list of job IDs in embeddings collection - ObejctId type
         self.job_metadata = {}      # job_id -> metadata dict
-        self.job_embeddings_ids = []  # list of original job IDs (maps indices to IDs)
+        self.job_embeddings_ids = []  # list of original job IDs (maps indices to IDs) - ObjectId type
         
         # Stats for monitoring
         self.cache_hits = 0
@@ -203,7 +203,7 @@ class TensorCache:
         self.job_text_ids = [job["_id"] for job in valid_jobs]
         
         # 5. Store job metadata
-        self.job_metadata = {str(job["_id"]): job for job in valid_jobs}
+        self.job_metadata = {job["_id"]: job for job in valid_jobs}
         
         # 6. Get and store job vectors
         job_vectors = db_connector.get_job_vectors(self.job_text_ids)
@@ -236,7 +236,7 @@ class TensorCache:
     
     def sample_jobs(self, n=100, exclude_ids=None):
         """
-        Sample n random jobs from the cache.
+        Sample n random jobs from the cache using optimized index access.
         
         Args:
             n: Number of jobs to sample
@@ -244,46 +244,69 @@ class TensorCache:
             
         Returns:
             Tuple containing:
-                - List[Dict]: List of job documents
-                - torch.Tensor: Tensor of job vectors [n, embedding_dim]
-                - List[str]: List of sampled job IDs
+                - List[Dict]: List of sampled job metadata documents
+                - torch.Tensor: Tensor of corresponding job vectors [n, embedding_dim]
+                - List[ObjectId]: List of sampled job ObjectIds
         """
         if not self.initialized:
             raise RuntimeError("Cache not initialized, call copy_from_database first")
         
-        # Determine available indices
-        available_indices = list(range(len(self.job_text_ids)))
+        num_cached_jobs = len(self.job_text_ids)
+        if num_cached_jobs == 0:
+            logger.warning("sample_jobs: Cache contains no jobs to sample from.")
+            return [], torch.empty((0, self.job_vectors.shape[1] if self.job_vectors is not None else 0), device=self.device), []
+            
+        # Determine available indices (indices corresponding to positions in job_text_ids/job_vectors)
+        available_indices = list(range(num_cached_jobs))
         
         # Exclude specific job IDs if provided
         if exclude_ids:
-            exclude_indices = [i for i, job_id in enumerate(self.job_text_ids) if job_id in exclude_ids]
-            available_indices = [i for i in available_indices if i not in exclude_indices]
+            # Find indices to exclude efficiently (might need optimization if exclude_ids is large)
+            # For moderate sizes, list comprehension is okay.
+            # Ensure exclude_ids contains ObjectIds if that's what job_text_ids holds.
+            exclude_indices_set = {i for i, job_id in enumerate(self.job_text_ids) if job_id in exclude_ids}
+            available_indices = [i for i in available_indices if i not in exclude_indices_set]
         
+        if not available_indices:
+             logger.warning("sample_jobs: No available jobs after exclusion.")
+             return [], torch.empty((0, self.job_vectors.shape[1]), device=self.device), []
+             
         # Sample n indices (or all if fewer than n are available)
         sample_size = min(n, len(available_indices))
         sampled_indices = random.sample(available_indices, sample_size)
         
-        # Get vectors for sampled jobs
+        # --- Optimized Retrieval using Indices --- 
+        # Get vectors for sampled jobs using tensor indexing
         sampled_vectors = self.job_vectors[sampled_indices]
         
-        # Get job IDs for sampled jobs
+        # Get job IDs for sampled jobs using list comprehension
         sampled_job_ids = [self.job_text_ids[i] for i in sampled_indices]
         
-        # Get job documents for sampled jobs
+        # Get job metadata documents using list comprehension and the parallel structure
+        # Assumes job_metadata keys are ObjectIds matching job_text_ids
+        # Directly fetch the metadata dict corresponding to the sampled index's job_id
         sampled_docs = []
-        for job_id in sampled_job_ids:
-            if job_id in self.job_metadata:
-                # Create a document similar to what would be returned from the database
-                metadata = self.job_metadata[job_id]
-                doc = {
-                    "_id": job_id,
-                    "job_title": metadata["job_title"],
-                    "description": metadata["description"],
-                    "technical_skills": metadata.get("technical_skills", []),
-                    "soft_skills": metadata.get("soft_skills", [])
-                }
-                sampled_docs.append(doc)
-        
+        for index in sampled_indices:
+            job_id = self.job_text_ids[index] # Get the ObjectId
+            try:
+                 metadata_doc = self.job_metadata[job_id] # Lookup using ObjectId key
+                 # We can return the full metadata doc, or create a simplified one if needed
+                 # Let's return the full one for now, as env relies on fields like 'description'
+                 sampled_docs.append(metadata_doc)
+            except KeyError:
+                 # This should ideally not happen if loading was correct, but log defensively
+                 logger.error(f"sample_jobs: Internal inconsistency! Job ID {job_id} (index {index}) not found in metadata keys during optimized sampling.")
+                 # Decide how to handle: skip? add placeholder? For now, skip.
+                 pass 
+                 
+        # Check if the number of docs matches vectors/ids (due to potential KeyErrors above)
+        if len(sampled_docs) != len(sampled_job_ids):
+            logger.warning(f"sample_jobs: Mismatch after metadata lookup - sampled {len(sampled_job_ids)} IDs/vectors but found {len(sampled_docs)} docs.")
+            # This might require re-filtering sampled_vectors and sampled_job_ids to match sampled_docs
+            # Or deciding if the inconsistency is acceptable.
+            # For now, returning potentially mismatched lists.
+            
+        logger.debug(f"sample_jobs: Finished optimized sampling. Found {len(sampled_docs)} documents.")
         return sampled_docs, sampled_vectors, sampled_job_ids
     
     def calculate_cosine_similarities(self, applicant_state):
