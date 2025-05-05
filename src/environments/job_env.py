@@ -203,7 +203,7 @@ class JobRecommendationEnv:
             
             # Handle dimension mismatch between applicant and job vectors
             if job_vector.shape[0] != self.current_state.shape[0]:
-                logger.info(f"Dimension mismatch: job vector {job_vector.shape[0]}, applicant state {self.current_state.shape[0]}")
+                logger.debug(f"Dimension mismatch: job vector {job_vector.shape[0]}, applicant state {self.current_state.shape[0]}")
                 
                 # When comparing applicant with job, we need to ensure we're comparing analogous components
                 # - Applicant vectors: [hard_skills (384), soft_skills (384)] = 768 dimensions
@@ -248,7 +248,7 @@ class JobRecommendationEnv:
             
             # Handle dimension mismatch between applicant and job vectors
             if job_vector.shape[0] != self.current_state.shape[0]:
-                logger.info(f"Dimension mismatch: job vector {job_vector.shape[0]}, applicant state {self.current_state.shape[0]}")
+                logger.debug(f"Dimension mismatch: job vector {job_vector.shape[0]}, applicant state {self.current_state.shape[0]}")
                 
                 # When comparing applicant with job, we need to ensure we're comparing analogous components
                 # - Applicant vectors: [hard_skills (384), soft_skills (384)] = 768 dimensions
@@ -315,7 +315,7 @@ class JobRecommendationEnv:
             
             # Handle dimension mismatch between applicant and job vectors
             if job_vectors_tensor.shape[1] != self.current_state.shape[0]:
-                logger.info(f"Dimension mismatch in calculate_all_cosine_rewards: job vector {job_vectors_tensor.shape[1]}, applicant state {self.current_state.shape[0]}")
+                logger.debug(f"Dimension mismatch in calculate_all_cosine_rewards: job vector {job_vectors_tensor.shape[1]}, applicant state {self.current_state.shape[0]}")
                 
                 # Option 1: Project job vectors to match applicant state dimension
                 if job_vectors_tensor.shape[1] > self.current_state.shape[0]:
@@ -753,9 +753,9 @@ Provide your answer as a single word: APPLY, SAVE, CLICK, or IGNORE.
             outputs = self.llm_model.generate(
                 **inputs,
                 max_new_tokens=50,
-                temperature=0.2,
-                do_sample=True,
-                top_p=0.95
+                temperature=0.2, # Keep temp low
+                do_sample=False, # CHANGE: Use greedy decoding
+                pad_token_id=self.tokenizer.eos_token_id # Ensure pad token is set
             )
         
         # Decode the response
@@ -769,6 +769,7 @@ Provide your answer as a single word: APPLY, SAVE, CLICK, or IGNORE.
     def _map_llm_response(self, response: str) -> str:
         """
         Map the LLM response to a predefined response type.
+        Falls back to IGNORE if mapping is unclear.
         
         Args:
             response: LLM response text.
@@ -790,8 +791,9 @@ Provide your answer as a single word: APPLY, SAVE, CLICK, or IGNORE.
         elif "ignore" in response_lower:
             return "IGNORE"
         else:
-            # Raise error on unclear response
-            raise ValueError(f"Unclear LLM response: '{response}'. Cannot map to a valid response type.")
+            # CHANGE: Log warning and default to IGNORE instead of raising error
+            logger.warning(f"Unclear LLM response: '{response}'. Defaulting to IGNORE.")
+            return "IGNORE"
 
 
 class HybridEnv(LLMSimulatorEnv):

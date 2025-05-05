@@ -698,14 +698,20 @@ class DynaQAgent:
                 pbar.set_postfix({
                     'reward': f"{episode_metrics['episode_reward']:.3f}",
                     'q_loss': f"{episode_metrics['q_network_loss']:.3f}",
-                    'world_loss': f"{episode_metrics['world_model_loss']:.3f}"
+                    'world_loss': f"{episode_metrics['world_model_loss']:.3f}",
+                    'plan_loss': f"{episode_metrics['planning_loss']:.3f}"
                 })
                 pbar.update(1)
                 
-                # Log progress
-                logger.info(f"Episode {episode}: Reward={episode_metrics['episode_reward']:.4f}, "
-                           f"Q-Loss={episode_metrics['q_network_loss']:.4f}, "
-                           f"World-Loss={episode_metrics['world_model_loss']:.4f}")
+                # Log progress (Refined Format)
+                log_msg = (
+                    f"Episode {episode+1}/{num_episodes} | "
+                    f"Reward: {episode_metrics['episode_reward']:.4f} | "
+                    f"Q-Loss: {episode_metrics['q_network_loss']:.4f} | "
+                    f"World-Loss: {episode_metrics['world_model_loss']:.4f} | "
+                    f"Plan-Loss: {episode_metrics['planning_loss']:.4f}"
+                )
+                logger.info(log_msg)
                 
                 # Evaluate periodically
                 if eval_frequency > 0 and episode % eval_frequency == 0:

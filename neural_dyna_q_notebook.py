@@ -152,7 +152,6 @@ else:
 
 # %%
 # Standard imports for data manipulation, visualization, and deep learning
-# Standard imports for data manipulation, visualization, and deep learning
 import os
 import sys
 import numpy as np
@@ -161,6 +160,51 @@ import random
 from tqdm.notebook import tqdm  # Use tqdm.notebook for Colab/notebook progress bars
 import torch
 from pathlib import Path
+
+# --- Configure Logging --- 
+import logging
+from config.config import PATH_CONFIG # Assuming PATH_CONFIG is defined here
+
+# Ensure log directory exists
+log_dir = PATH_CONFIG.get("log_dir", "logs") # Default to ./logs if not in config
+if not os.path.isabs(log_dir):
+    # If relative path, assume relative to project root (modify if needed)
+    try:
+        project_root_for_log = Path(__file__).resolve().parent.parent
+    except NameError:
+        project_root_for_log = Path('.').absolute()
+    log_dir = os.path.join(project_root_for_log, log_dir)
+os.makedirs(log_dir, exist_ok=True)
+log_file_path = os.path.join(log_dir, 'notebook_run.log')
+
+# Get root logger and set level
+# Set level to INFO to see INFO, WARNING, ERROR, CRITICAL
+# Set level to DEBUG to see everything
+log_level = logging.INFO # Or logging.DEBUG for more verbosity
+logger = logging.getLogger() 
+logger.setLevel(log_level)
+
+# Remove existing handlers if any (to avoid duplicates, optional)
+# for handler in logger.handlers[:]:
+#    logger.removeHandler(handler)
+
+# Create formatter
+log_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+
+# Create File Handler
+file_handler = logging.FileHandler(log_file_path, mode='w') # 'w' to overwrite each run
+file_handler.setFormatter(log_formatter)
+file_handler.setLevel(log_level)
+logger.addHandler(file_handler)
+
+# Create Stream Handler (for notebook output)
+stream_handler = logging.StreamHandler(sys.stdout)
+stream_handler.setFormatter(log_formatter)
+stream_handler.setLevel(log_level)
+logger.addHandler(stream_handler)
+
+logger.info(f"Logging configured. Level: {logging.getLevelName(log_level)}. File: {log_file_path}")
+# --- End Logging Configuration ---
 
 # Dynamically add the project root to the Python path
 # This allows importing modules from the project's source code, regardless of the current working directory.
