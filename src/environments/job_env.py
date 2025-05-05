@@ -696,26 +696,26 @@ class LLMSimulatorEnv(JobRecommendationEnv):
         # Use f-string for cleaner formatting and ensure no leading/trailing whitespace issues
         # Added [INST] and [/INST] markers around the instruction part.
         # Made the final instruction more direct and demanding.
-        prompt = f"""<s>[INST] You are simulating a job seeker's response to a job recommendation.
+        prompt = f"""<s>[INST] You are simulating a job seeker's response to a job recommendation.  
 
-JOB SEEKER PROFILE:
-{applicant_bio.strip()}
+JOB SEEKER PROFILE:  
+{applicant_bio.strip()}  
 
-RESUME:
-{applicant_resume.strip()}
+RESUME:  
+{applicant_resume.strip()}  
 
-JOB RECOMMENDATION:
-Title: {job_title.strip()}
-Description:
-{job_description.strip()}
+JOB RECOMMENDATION:  
+Title: {job_title.strip()}  
+Description:  
+{job_description.strip()}  
 
-Based on the match between the job seeker's profile and the job recommendation, how would the job seeker respond? Choose ONLY ONE of the following four options:
-- APPLY (The job seeker would submit an application for this position)
-- SAVE (The job seeker would save this job for later consideration)
-- CLICK (The job seeker would click to view more details)
-- IGNORE (The job seeker would ignore this recommendation)
+Based on the job seeker's profile, would this role be a **perfect fit** they're **excited about**? Choose ONLY ONE:  
+- APPLY (Strong alignment—clear match with skills and interests)  
+- SAVE (Potential fit, but needs further review)  
+- CLICK (Mild interest—requires more details)  
+- IGNORE (Irrelevant or unappealing)  
 
-Your response MUST be a single word: APPLY, SAVE, CLICK, or IGNORE. Do not add any explanation or other text. [/INST]"""
+Respond with JUST ONE WORD: APPLY, SAVE, CLICK, or IGNORE. No explanations. [/INST]"""  
         return prompt # Return the raw prompt string
     
     def _get_llm_decision(self, prompt: str) -> str:
