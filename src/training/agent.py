@@ -540,60 +540,37 @@ class DynaQAgent:
         if self.training_strategy == "hybrid" and isinstance(env, HybridEnv):
             env.set_cosine_weight(self.cosine_weight)
         
-        # Check if environment has tensor cache for optimized operations
-        # This branch assumes TensorCache is always available via self.tensor_cache
-        if not hasattr(self, 'tensor_cache') or self.tensor_cache is None:
-            logger.error("TensorCache not initialized in agent. Cannot proceed with training step.")
-            # Return empty metrics or raise error, episode cannot run
-            return metrics # Return current (likely zero) metrics
-        
-        # Get the number of actions to sample from config, default to 50 if not set
-        try:
-            action_sampling_size = TRAINING_CONFIG["action_sampling_size"]
-        except KeyError:
-            logger.error("'action_sampling_size' not found in TRAINING_CONFIG. Please define it in config/config.py")
-            # Raise the error or return/break depending on desired handling
-            raise # Reraise the error to stop execution
-        
-        # Training loop - not using tqdm here to avoid nested progress bars which would clutter the output
+        # Training loop
         for step in range(max_steps):
-            # Action Sampling Logic (assumes self.tensor_cache exists)
-            # 1. Get all valid job indices from cache
-            all_job_indices = self.tensor_cache.get_valid_job_indices()
-            if not all_job_indices:
-                logger.error("TensorCache has no valid job indices. Cannot select action.")
-                break # Exit episode if no actions available
+            # --- Use Environment's Action Space --- 
+            # 1. Get valid action indices *within the current environment sample* 
+            valid_action_indices_in_sample = env.get_valid_actions() 
+            if not valid_action_indices_in_sample:
+                logger.warning(f"train_step {step}: env.get_valid_actions() returned empty list. Ending episode.")
+                break 
+
+            # 2. Get the corresponding action vectors for these indices
+            #    using the environment's method (which accesses its internal self.job_vectors)
+            available_actions = [env.get_action_vector(idx) for idx in valid_action_indices_in_sample]
+            if not available_actions: 
+                logger.warning(f"train_step {step}: available_actions list is empty after getting vectors. Ending episode.")
+                break 
             
-            # 2. Sample a subset of indices
-            num_to_sample = min(action_sampling_size, len(all_job_indices))
-            candidate_indices = random.sample(all_job_indices, num_to_sample)
+            # 3. Select action from the list of environment-sampled action tensors
+            #    select_action returns the index relative to the available_actions list (e.g., 0-99)
+            selected_sample_idx, action_vector = self.select_action(state, available_actions)
             
-            # 3. Get the corresponding action vectors for the subset
-            candidate_action_vectors = [self.tensor_cache.get_job_vector_by_index(idx) for idx in candidate_indices]
-            if not candidate_action_vectors: # Should not happen if indices were valid
-                logger.error(f"Failed to retrieve action vectors for sampled indices: {candidate_indices}")
-                break # Exit episode
+            # --- Pass Sample-Relative Index to env.step --- 
+            # The action index to pass to the environment is the index within the current sample
+            action_idx_for_env = selected_sample_idx 
             
-            # Select action from the list of available action tensors
-            # self.select_action expects a list of tensors
-            # It returns the index within the *candidate_action_vectors* list
-            selected_subset_idx, action_vector = self.select_action(state, candidate_action_vectors)
+            # Take action in environment using the sample-relative index
+            next_state, reward, done, info = env.step(action_idx_for_env)
             
-            # Map the index back to the original cache index (if using cache)
-            # or the environment index (if not using cache)
-            action_id_for_env = candidate_indices[selected_subset_idx]
+            # Log info using the sample-relative index
+            logger.debug(f"Step {step}: Action Index (in env sample)={action_idx_for_env}, Reward={reward:.4f}")
             
-            # Take action in environment
-            # We need to pass the original cache index to the environment step function
-            # This assumes env.step() can handle the absolute cache index or job_id
-            # If env.step strictly requires an index relative to its *internal* valid list,
-            # this will need further adjustment in the environment class.
-            next_state, reward, done, info = env.step(action_id_for_env)
-            
-            # Log info
-            logger.debug(f"Step {step}: Action Index (in cache/env)={action_id_for_env}, Reward={reward:.4f}")
-            
-            # Store experience in replay buffer
+            # Store experience in replay buffer (using the chosen action_vector)
             self.store_experience(state, action_vector, reward, next_state)
             
             # Update metrics
@@ -612,9 +589,13 @@ class DynaQAgent:
                 world_loss = self.update_world_model(states_batch, actions_batch, rewards_batch)
                 metrics['world_model_loss'] += world_loss
                 
-                # Planning with world model
-                planning_metrics = self.plan(env)
-                metrics['planning_loss'] += planning_metrics['planning_loss']
+                # Planning with world model (Still requires self.tensor_cache if using optimized planning)
+                # Ensure self.tensor_cache was set during agent init
+                if self.tensor_cache:
+                    planning_metrics = self.plan(env)
+                    metrics['planning_loss'] += planning_metrics['planning_loss']
+                else:
+                     logger.warning("Agent's tensor_cache is None, skipping planning step.")
                 
                 # Update target network periodically
                 self.steps_done += 1
