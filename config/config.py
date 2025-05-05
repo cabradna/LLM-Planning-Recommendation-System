@@ -64,8 +64,8 @@ TRAINING_CONFIG = {
     # Core reinforcement learning parameters
     "gamma": 0.9,  # Discount factor
     "lr": 0.001,  # Learning rate
-    "batch_size": 64,  # Batch size for training
-    "target_update_freq": 1000,  # Target network update frequency
+    "batch_size": 128,  # Batch size for training
+    "target_update_freq": 100,  # Target network update frequency
     "planning_steps": 5,  # Number of planning steps in Dyna-Q
     
     # Exploration parameters
@@ -79,7 +79,7 @@ TRAINING_CONFIG = {
 
     # Training process
     "num_episodes": 100,  # Number of episodes
-    "max_steps_per_episode": 100,  # Maximum steps per episode
+    "max_steps_per_episode": 50,  # Maximum steps per episode
     "eval_frequency": 10,  # Evaluation frequency (episodes)
     "save_frequency": 10,  # Model saving frequency (episodes)
 
@@ -89,8 +89,8 @@ TRAINING_CONFIG = {
 
     # Pretraining parameters
     "pretraining": {
-        "num_samples": 10000,  # Number of samples for pretraining
-        "num_epochs": 20,  # Number of pretraining epochs
+        "num_samples": 1000,  # Number of samples for pretraining
+        "num_epochs": 10,  # Number of pretraining epochs
     },
 
     "random_seed": 42,  # Random seed for reproducibility
@@ -104,7 +104,7 @@ TRAINING_CONFIG = {
 # Pretraining Configuration
 PRETRAINING_CONFIG = {
     "dataset_size": 10000,  # Number of samples in pretraining dataset
-    "num_epochs": 20,  # Number of pretraining epochs
+    "num_epochs": 50,  # Number of pretraining epochs
     "batch_size": 128,  # Batch size for pretraining
     "lr": 0.001,  # Learning rate for pretraining
     "weight_decay": 1e-5,  # Weight decay for regularization
