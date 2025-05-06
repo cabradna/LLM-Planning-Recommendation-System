@@ -243,7 +243,8 @@ from config.config import (
     PATH_CONFIG,
     EVAL_CONFIG,
     HF_CONFIG,
-    ENV_CONFIG
+    ENV_CONFIG,
+    PRETRAINING_CONFIG
 )
 
 # Set random seeds for reproducibility
@@ -275,7 +276,7 @@ from src.data.tensor_cache import TensorCache
 
 print("Project modules imported successfully.")
 # %% [markdown]
-# ## 4. Database Connection
+# ## 3. Database Connection
 # 
 # The system connects to a MongoDB Atlas database containing job postings and candidate information. The database includes collections for:
 # - Job text data (descriptions, requirements, etc.)
@@ -302,7 +303,7 @@ except Exception as e:
     raise
 
 # %% [markdown]
-# ## 5. Data Loading, Cache Init, Agent/Env Init, and First Reset
+# ## 4. Data Loading, Cache Init, Agent/Env Init, and First Reset
 #
 # This combined cell handles:
 # 1. Selecting the target candidate ID
@@ -332,7 +333,8 @@ CACHE_CONFIG = {
 
 tensor_cache = None # Define outside the if block for broader scope if needed later
 env = None
-agent = None
+# agent_cosine and agent_hybrid will be defined in their respective training blocks.
+# The initial agent definition here is mostly for confirming setup and can be streamlined.
 
 if CACHE_CONFIG["enabled"]:
     print(f"Initializing tensor cache on {CACHE_CONFIG['device']}...")
@@ -348,10 +350,11 @@ if CACHE_CONFIG["enabled"]:
     print(f"Memory device: {stats['device']}")
 
     # Create environment with cache (NO db_connector)
-    if reward_strategy == "cosine":
+    # This env will be used by agent_hybrid. agent_cosine.pretrain uses data directly.
+    if reward_strategy == "cosine": # This path might be less used if hybrid is the focus
         env = JobRecommendationEnv(
             tensor_cache=tensor_cache,
-            reward_scheme=STRATEGY_CONFIG["llm"]["response_mapping"], # Keep scheme for potential hybrid switch
+            reward_scheme=STRATEGY_CONFIG["llm"]["response_mapping"], 
             reward_strategy="cosine",
             random_seed=ENV_CONFIG["random_seed"]
         )
@@ -361,7 +364,7 @@ if CACHE_CONFIG["enabled"]:
             reward_scheme=STRATEGY_CONFIG["llm"]["response_mapping"],
             random_seed=ENV_CONFIG["random_seed"]
         )
-    elif reward_strategy == "hybrid":
+    elif reward_strategy == "hybrid": # This is the expected reward_strategy
         env = HybridEnv(
             tensor_cache=tensor_cache,
             reward_scheme=STRATEGY_CONFIG["llm"]["response_mapping"],
@@ -370,71 +373,42 @@ if CACHE_CONFIG["enabled"]:
         )
     else:
         raise ValueError(f"Unknown reward strategy: {reward_strategy}")
-    print(f"Created {reward_strategy} environment instance.")
+    print(f"Created {env.__class__.__name__} for main training (strategy: {reward_strategy}).")
 
 else:
     raise RuntimeError("TensorCache is disabled in CACHE_CONFIG, but the environment now requires it.")
 
-# Initialize Models
-q_network = QNetwork(
-    state_dim=MODEL_CONFIG["q_network"]["state_dim"],
-    action_dim=MODEL_CONFIG["q_network"]["action_dim"],
-    hidden_dims=MODEL_CONFIG["q_network"]["hidden_dims"],
-    dropout_rate=MODEL_CONFIG["q_network"]["dropout_rate"],
-    activation=MODEL_CONFIG["q_network"]["activation"]
-).to(device)
-
-world_model = WorldModel(
-    input_dim=MODEL_CONFIG["world_model"]["input_dim"],
-    hidden_dims=MODEL_CONFIG["world_model"]["hidden_dims"],
-    dropout_rate=MODEL_CONFIG["world_model"]["dropout_rate"],
-    activation=MODEL_CONFIG["world_model"]["activation"]
-).to(device)
-print("Initialized QNetwork and WorldModel.")
-
-# Initialize DynaQAgent
-agent = DynaQAgent(
-    state_dim=MODEL_CONFIG["q_network"]["state_dim"],
-    action_dim=MODEL_CONFIG["q_network"]["action_dim"],
-    q_network=q_network,
-    target_network=None, # Allow init to create target network
-    world_model=world_model,
-    training_strategy=reward_strategy,
-    device=device,
-    target_applicant_id=target_candidate_id,
-    tensor_cache=tensor_cache # Pass the populated cache
-)
-print(f"Initialized DynaQAgent for applicant {target_candidate_id}.")
+# Models will be initialized within their respective agent training blocks (9 and 10)
+# to ensure fresh weights for independent training.
 
 # Initialize Visualizer & Evaluator
 visualizer = Visualizer()
 evaluator = Evaluator()
 print("Initialized Visualizer and Evaluator.")
 
-# Reset environment and verify
+# Reset environment for the target candidate (primarily for agent_hybrid training)
 try:
-    print(f"Resetting environment for applicant: {target_candidate_id}")
-    # Check cache content just before reset for debugging
+    print(f"Resetting environment for applicant: {target_candidate_id} (for main training setup)")
     if tensor_cache and target_candidate_id:
          print(f"Cache check before reset: Applicant '{str(target_candidate_id)}' in applicant_states: {str(target_candidate_id) in tensor_cache.applicant_states}")
          
-    initial_state = env.reset(applicant_id=target_candidate_id)
+    initial_state_for_hybrid_env = env.reset(applicant_id=target_candidate_id) # Store for potential use by hybrid agent
     
     if not hasattr(env, 'current_state') or env.current_state is None:
          raise ValueError("Environment reset failed - current_state is None or missing after reset.")
-    if initial_state is None:
+    if initial_state_for_hybrid_env is None:
          raise ValueError("Environment reset failed - returned None state.")
          
-    print(f"Environment reset successful. Initial state shape: {initial_state.shape}")
-    print(f"Environment setup complete with {reward_strategy} reward strategy.")
+    print(f"Environment reset successful. Initial state shape for hybrid env: {initial_state_for_hybrid_env.shape}")
+    print(f"Environment setup for main agent complete with {reward_strategy} reward strategy.")
     
 except Exception as e:
     print(f"ERROR during env.reset or verification: {e}")
-    logger.error("Failed during initial environment reset", exc_info=True)
+    logger.error("Failed during initial environment reset for main agent", exc_info=True)
     raise
 
 # %% [markdown]
-# ## 7. LLM Integration (If Using LLM-Based Reward Strategy)
+# ## 5. LLM Integration (If Using LLM-Based Reward Strategy)
 # 
 # If we're using an LLM-based reward strategy (either "llm" or "hybrid"), we need to set up a language model to simulate candidate responses to job recommendations. This helps in generating more realistic rewards based on semantic understanding of both candidate profiles and job descriptions.
 # 
@@ -442,6 +416,7 @@ except Exception as e:
 
 # %%
 # Set up LLM in the environment for reward calculation
+# This setup applies to the 'env' instance that will be used by agent_hybrid
 if STRATEGY_CONFIG["llm"]["enabled"] and (reward_strategy == "llm" or reward_strategy == "hybrid"):
     from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
     from huggingface_hub import login
@@ -478,11 +453,8 @@ if STRATEGY_CONFIG["llm"]["enabled"] and (reward_strategy == "llm" or reward_str
     
     print(f"LLM model loaded successfully: {model_id}")
     
-    # Add LLM to the environment using the updated method
-    # env.setup_llm should handle creating HybridEnv if needed
-    # The method now returns the potentially new env instance
     env = env.setup_llm(llm_model, tokenizer, device="auto") 
-    print(f"Ensured LLM is set up in {env.__class__.__name__} for strategy '{reward_strategy}'")
+    print(f"Ensured LLM is set up in {env.__class__.__name__} for strategy '{reward_strategy}' (used by agent_hybrid)")
 
 # %% [markdown]
 # ## 8. Training Setup
@@ -493,244 +465,251 @@ if STRATEGY_CONFIG["llm"]["enabled"] and (reward_strategy == "llm" or reward_str
 # 2. Q-Network and World Model updates
 # 3. Loss tracking and metrics
 # 4. Model checkpointing
+# 
+# This section provides general parameters; specific agents will be configured in their training blocks.
 
 # %%
-# Verify the agent is properly set up
-print(f"Agent device: {agent.device}")
-print(f"Training strategy: {agent.training_strategy}")
-print(f"Q-Network parameters: {sum(p.numel() for p in agent.q_network.parameters() if p.requires_grad):,}")
-print(f"World Model parameters: {sum(p.numel() for p in agent.world_model.parameters() if p.requires_grad):,}")
-print(f"Planning steps: {TRAINING_CONFIG['planning_steps']}")
-print(f"Batch size: {TRAINING_CONFIG['batch_size']}")
+# General training parameters that will be used by both agents if not overridden
+# Print general configs for verification
+print(f"Device for training: {device}")
+print(f"Default Planning steps: {TRAINING_CONFIG['planning_steps']}")
+print(f"Default Batch size: {TRAINING_CONFIG['batch_size']}")
+print(f"Default Gamma: {TRAINING_CONFIG['gamma']}")
 
-# Configure any additional training parameters
-agent.planning_steps = TRAINING_CONFIG['planning_steps']
-agent.batch_size = TRAINING_CONFIG['batch_size']
-agent.gamma = TRAINING_CONFIG['gamma']
-
-print("Training setup completed successfully.")
+print("General training setup parameters noted.")
 
 # %% [markdown]
-# ## 9. Pretraining Phase
+# ## 6. Cosine Strategy Agent Training (Baseline)
 # 
-# In the pretraining phase, we'll use the agent's built-in pretraining method to:
-# 1. Generate initial experiences
-# 2. Train the Q-network and world model
-# 3. Track training metrics
-# 4. Save model checkpoints
+# In this phase, we train an agent (`agent_cosine`) using exclusively the cosine similarity for reward generation. This agent will serve as our baseline.
 
 # %%
-# Define pretraining parameters from config
-num_pretraining_samples = TRAINING_CONFIG["pretraining"]["num_samples"]
-num_pretraining_epochs = TRAINING_CONFIG["pretraining"]["num_epochs"]
-batch_size = TRAINING_CONFIG["batch_size"]
+# Define pretraining parameters from config (used for agent_cosine training)
+num_pretraining_samples = PRETRAINING_CONFIG["num_samples"]
+num_pretraining_epochs = PRETRAINING_CONFIG["num_epochs"]
+cosine_training_batch_size = TRAINING_CONFIG["batch_size"] # Can be specific if needed
 
-# Force cosine strategy for pretraining, regardless of main strategy
-pretraining_strategy = "cosine" 
+# Initialize agent_cosine with fresh networks
+print("Initializing agent_cosine for COSINE strategy training...")
+q_network_cosine = QNetwork(
+    state_dim=MODEL_CONFIG["q_network"]["state_dim"],
+    action_dim=MODEL_CONFIG["q_network"]["action_dim"],
+    hidden_dims=MODEL_CONFIG["q_network"]["hidden_dims"],
+    dropout_rate=MODEL_CONFIG["q_network"]["dropout_rate"],
+    activation=MODEL_CONFIG["q_network"]["activation"]
+).to(device)
 
-print(f"Starting pretraining with {pretraining_strategy} strategy...")
+world_model_cosine = WorldModel(
+    input_dim=MODEL_CONFIG["world_model"]["input_dim"],
+    hidden_dims=MODEL_CONFIG["world_model"]["hidden_dims"],
+    dropout_rate=MODEL_CONFIG["world_model"]["dropout_rate"],
+    activation=MODEL_CONFIG["world_model"]["activation"]
+).to(device)
 
-# Generate pretraining data
-print("Generating pretraining data...")
-pretraining_data = []
+agent_cosine = DynaQAgent(
+    state_dim=MODEL_CONFIG["q_network"]["state_dim"],
+    action_dim=MODEL_CONFIG["q_network"]["action_dim"],
+    q_network=q_network_cosine,
+    world_model=world_model_cosine,
+    training_strategy="cosine", # Explicitly cosine
+    device=device,
+    target_applicant_id=target_candidate_id,
+    tensor_cache=tensor_cache
+)
+# Configure agent_cosine specific training parameters
+agent_cosine.planning_steps = TRAINING_CONFIG['planning_steps'] # Or a specific value for cosine agent
+agent_cosine.batch_size = cosine_training_batch_size
+agent_cosine.gamma = TRAINING_CONFIG['gamma']
+print(f"Initialized agent_cosine with training strategy: {agent_cosine.training_strategy}")
 
-# Get applicant state from cache
+
+print("Starting training for agent_cosine (using pretraining method with cosine data)...")
+
+# Generate pretraining data (cosine-based rewards)
+print("Generating cosine-based training data for agent_cosine...")
+cosine_training_data = []
+
 try:
-    initial_state_tensor = tensor_cache.get_applicant_state(target_candidate_id)
+    initial_state_tensor_cosine = tensor_cache.get_applicant_state(target_candidate_id)
 except KeyError as e:
-    print(f"Error: {e}. Applicant not found in cache. Cannot proceed with pretraining.")
+    print(f"Error: {e}. Applicant not found in cache. Cannot proceed with agent_cosine training.")
     raise
 
-# Get valid job indices from tensor cache
-valid_job_indices = tensor_cache.get_valid_job_indices()
-print(f"Found {len(valid_job_indices)} valid jobs in tensor cache")
+valid_job_indices_cosine = tensor_cache.get_valid_job_indices()
+print(f"Found {len(valid_job_indices_cosine)} valid jobs in tensor cache for agent_cosine training")
 
-if not valid_job_indices:
-    raise ValueError("Tensor cache contains no valid jobs. Cannot generate pretraining data.")
+if not valid_job_indices_cosine:
+    raise ValueError("Tensor cache contains no valid jobs. Cannot generate agent_cosine training data.")
 
-# Determine number of samples to generate
-num_samples_to_generate = min(num_pretraining_samples, len(valid_job_indices))
-indices_to_use = valid_job_indices[:num_samples_to_generate] # Use the first N valid indices
+num_samples_to_generate_cosine = min(num_pretraining_samples, len(valid_job_indices_cosine))
+indices_to_use_cosine = valid_job_indices_cosine[:num_samples_to_generate_cosine]
 
-if pretraining_strategy == "cosine":
-    print("Using tensor cache only for cosine strategy.")
-    # Pre-calculate all cosine similarity rewards
-    print("Pre-calculating all cosine similarity rewards...")
-    all_rewards = tensor_cache.calculate_cosine_similarities(initial_state_tensor)
-    if STRATEGY_CONFIG["cosine"]["scale_reward"]:
-        all_rewards = (all_rewards + 1) / 2 # Scale from [-1, 1] to [0, 1]
-    print("Cosine rewards calculated.")
+print("Pre-calculating all cosine similarity rewards for agent_cosine training...")
+all_rewards_cosine = tensor_cache.calculate_cosine_similarities(initial_state_tensor_cosine)
+if STRATEGY_CONFIG["cosine"]["scale_reward"]:
+    all_rewards_cosine = (all_rewards_cosine + 1) / 2 # Scale from [-1, 1] to [0, 1]
+print("Cosine rewards calculated for agent_cosine.")
     
-    # Collect pretraining experiences using cache
-    print(f"Generating {num_samples_to_generate} samples using cache...")
-    for cache_job_idx in tqdm(indices_to_use, desc="Generating pretraining data (cosine)"):
-        action_tensor = tensor_cache.get_job_vector_by_index(cache_job_idx)
-        reward = all_rewards[cache_job_idx].item()
-        # Assuming static state for pretraining
-        next_state_tensor = initial_state_tensor 
-        pretraining_data.append((initial_state_tensor, action_tensor, reward, next_state_tensor))
+print(f"Generating {num_samples_to_generate_cosine} samples for agent_cosine training...")
+for cache_job_idx_cosine in tqdm(indices_to_use_cosine, desc="Generating agent_cosine training data"):
+    action_tensor_cosine = tensor_cache.get_job_vector_by_index(cache_job_idx_cosine)
+    reward_cosine = all_rewards_cosine[cache_job_idx_cosine].item()
+    next_state_tensor_cosine = initial_state_tensor_cosine 
+    cosine_training_data.append((initial_state_tensor_cosine, action_tensor_cosine, reward_cosine, next_state_tensor_cosine))
 
-# This part should now NOT be reached if pretraining_strategy is forced to 'cosine'
-# elif pretraining_strategy in ["llm", "hybrid"]:
-#     print(f"Using environment interaction for {pretraining_strategy} strategy.")
-#     # ... (code for env interaction - removed for clarity as it's not used now)
-else:
-    # This handles the case where pretraining_strategy is somehow not 'cosine'
-    raise ValueError(f"Unsupported pretraining strategy: {pretraining_strategy}")
+print(f"Collected {len(cosine_training_data)} experiences for agent_cosine")
 
-print(f"Collected {len(pretraining_data)} pretraining experiences")
+if not cosine_training_data:
+    raise RuntimeError("No training data was collected for agent_cosine. Cannot proceed.")
 
-# Check if any data was collected before stacking
-if not pretraining_data:
-    raise RuntimeError("No pretraining data was collected. Cannot proceed.")
-
-# Create tensor batches
-# Ensure all tensors in the list have the same shape before stacking
 try:
-    states = torch.stack([d[0] for d in pretraining_data]).to(device)
-    actions = torch.stack([d[1] for d in pretraining_data]).to(device)
-    rewards = torch.tensor([d[2] for d in pretraining_data], dtype=torch.float32, device=device)
-    next_states = torch.stack([d[3] for d in pretraining_data]).to(device)
+    states_cosine = torch.stack([d[0] for d in cosine_training_data]).to(device)
+    actions_cosine = torch.stack([d[1] for d in cosine_training_data]).to(device)
+    rewards_cosine = torch.tensor([d[2] for d in cosine_training_data], dtype=torch.float32, device=device)
+    next_states_cosine = torch.stack([d[3] for d in cosine_training_data]).to(device)
 except RuntimeError as e:
-    print(f"Error creating tensor batches: {e}")
-    # Add more detailed logging if needed
-    # for i, d in enumerate(pretraining_data):
-    #     print(f"Data point {i}: state shape {d[0].shape}, action shape {d[1].shape}, next_state shape {d[3].shape}")
+    print(f"Error creating tensor batches for agent_cosine: {e}")
     raise
 
-# Run pretraining using agent's built-in pretrain method
-print("Starting pretraining of neural networks")
-pretraining_metrics = agent.pretrain(
-    states=states,
-    actions=actions,
-    rewards=rewards,
-    next_states=next_states,
-    num_epochs=num_pretraining_epochs,
-    batch_size=batch_size
+# Run training for agent_cosine using the agent's pretrain method (as it takes static data)
+print("Starting agent_cosine network training (using its .pretrain() method)")
+agent_cosine_training_metrics = agent_cosine.pretrain(
+    states=states_cosine,
+    actions=actions_cosine,
+    rewards=rewards_cosine,
+    next_states=next_states_cosine,
+    num_epochs=num_pretraining_epochs, # Using pretraining epochs for this cosine training
+    batch_size=cosine_training_batch_size
 )
 
-# Plot pretraining metrics
+# Plot agent_cosine training metrics
 visualizer.plot_training_metrics(
     metrics={
-        'q_losses': pretraining_metrics['q_losses'],
-        'world_losses': pretraining_metrics['world_losses']
+        'q_losses': agent_cosine_training_metrics['q_losses'],
+        'world_losses': agent_cosine_training_metrics['world_losses']
     },
-    title="Pretraining Losses"
+    title="agent_cosine Training Losses (Cosine Strategy)"
 )
 
-# Configure agent for main training
-agent.planning_steps = TRAINING_CONFIG['planning_steps']
-agent.batch_size = TRAINING_CONFIG['batch_size']
-agent.gamma = TRAINING_CONFIG['gamma']
-
-print("Pretraining completed successfully.")
+print("agent_cosine training (using pretraining method) completed successfully.")
 
 # %% [markdown]
-# ## 10. Main Training Loop
+# ## 7. Hybrid Strategy Agent Training
 # 
-# Now we'll run the main training loop using the agent's training interface.
-# The agent will:
-# 1. Interact with the environment
-# 2. Store experiences in its replay buffer
-# 3. Update networks using the stored experiences
-# 4. Track and report training metrics
+# Now we train a separate agent (`agent_hybrid`) using the main experimental strategy (e.g., "hybrid").
+# This agent starts with fresh network weights and is trained independently of `agent_cosine`.
 
 # %%
-# Training parameters from config
-num_episodes = TRAINING_CONFIG["num_episodes"]
-max_steps_per_episode = TRAINING_CONFIG["max_steps_per_episode"]
+# Training parameters from config for agent_hybrid
+num_episodes_hybrid = TRAINING_CONFIG["num_episodes"]
+max_steps_per_episode_hybrid = TRAINING_CONFIG["max_steps_per_episode"]
 
-print("Starting main training loop...")
+print(f"Starting main training loop for agent_hybrid (strategy: {reward_strategy})...")
 
-# Set up for multiple experiments
-num_experiments = 5  # Number of experiments to run
-experiment_results = {
+# Set up for multiple experiments for agent_hybrid
+num_experiments = 5  # Number of experiments to run for agent_hybrid
+experiment_results_hybrid = {
     'q_network_loss': [],
     'world_model_loss': [],
     'episode_reward': [],
     'eval_reward': []
 }
 
-# Create directory for saving results
-results_dir = os.path.join(PATH_CONFIG["results_dir"], "multi_experiment")
-os.makedirs(results_dir, exist_ok=True)
+# Ensure the environment for agent_hybrid is the one configured with LLM if hybrid strategy is used.
+# The 'env' variable should already be the HybridEnv instance if configured earlier.
+print(f"Using environment of type: {env.__class__.__name__} for agent_hybrid training.")
 
-# Run multiple experiments
+# agent_hybrid will be defined and potentially re-initialized inside the loop
+agent_hybrid = None 
+
+# Create directory for saving agent_hybrid results
+results_dir_hybrid = os.path.join(PATH_CONFIG["results_dir"], f"multi_experiment_{reward_strategy}")
+os.makedirs(results_dir_hybrid, exist_ok=True)
+
+# Run multiple experiments for agent_hybrid
 for exp_idx in range(num_experiments):
-    print(f"\nStarting experiment {exp_idx+1}/{num_experiments}")
+    print(f"\nStarting agent_hybrid experiment {exp_idx+1}/{num_experiments}")
     
-    # Reinitialize agent for each experiment to ensure independence
-    if exp_idx > 0:
-        q_network = QNetwork(
-            state_dim=MODEL_CONFIG["q_network"]["state_dim"],
-            action_dim=MODEL_CONFIG["q_network"]["action_dim"],
-            hidden_dims=MODEL_CONFIG["q_network"]["hidden_dims"],
-            dropout_rate=MODEL_CONFIG["q_network"]["dropout_rate"],
-            activation=MODEL_CONFIG["q_network"]["activation"]
-        ).to(device)
+    # Initialize or Reinitialize agent_hybrid for each experiment to ensure independence
+    print(f"Initializing new agent_hybrid instance for experiment {exp_idx+1}...")
+    q_network_hybrid_exp = QNetwork(
+        state_dim=MODEL_CONFIG["q_network"]["state_dim"],
+        action_dim=MODEL_CONFIG["q_network"]["action_dim"],
+        hidden_dims=MODEL_CONFIG["q_network"]["hidden_dims"],
+        dropout_rate=MODEL_CONFIG["q_network"]["dropout_rate"],
+        activation=MODEL_CONFIG["q_network"]["activation"]
+    ).to(device)
 
-        world_model = WorldModel(
-            input_dim=MODEL_CONFIG["world_model"]["input_dim"],
-            hidden_dims=MODEL_CONFIG["world_model"]["hidden_dims"],
-            dropout_rate=MODEL_CONFIG["world_model"]["dropout_rate"],
-            activation=MODEL_CONFIG["world_model"]["activation"]
-        ).to(device)
-        
-        agent = DynaQAgent(
-            state_dim=MODEL_CONFIG["q_network"]["state_dim"],
-            action_dim=MODEL_CONFIG["q_network"]["action_dim"],
-            q_network=q_network,
-            world_model=world_model,
-            training_strategy=reward_strategy,
-            device=device,
-            target_applicant_id=target_candidate_id,
-            tensor_cache=tensor_cache
-        )
+    world_model_hybrid_exp = WorldModel(
+        input_dim=MODEL_CONFIG["world_model"]["input_dim"],
+        hidden_dims=MODEL_CONFIG["world_model"]["hidden_dims"],
+        dropout_rate=MODEL_CONFIG["world_model"]["dropout_rate"],
+        activation=MODEL_CONFIG["world_model"]["activation"]
+    ).to(device)
     
-    # Run training for this experiment
-    training_metrics = agent.train(
-        env=env,
-        num_episodes=num_episodes,
-        max_steps_per_episode=max_steps_per_episode,
+    agent_hybrid = DynaQAgent(
+        state_dim=MODEL_CONFIG["q_network"]["state_dim"],
+        action_dim=MODEL_CONFIG["q_network"]["action_dim"],
+        q_network=q_network_hybrid_exp,
+        world_model=world_model_hybrid_exp,
+        training_strategy=reward_strategy, # This should be 'hybrid' or 'llm'
+        device=device,
+        target_applicant_id=target_candidate_id,
+        tensor_cache=tensor_cache
+    )
+    # Configure agent_hybrid specific training parameters
+    agent_hybrid.planning_steps = TRAINING_CONFIG['planning_steps']
+    agent_hybrid.batch_size = TRAINING_CONFIG['batch_size']
+    agent_hybrid.gamma = TRAINING_CONFIG['gamma']
+    print(f"Initialized agent_hybrid with training strategy: {agent_hybrid.training_strategy}")
+
+    # Run training for this agent_hybrid experiment
+    # The env here should be the HybridEnv if reward_strategy is hybrid
+    training_metrics_hybrid = agent_hybrid.train(
+        env=env, 
+        num_episodes=num_episodes_hybrid,
+        max_steps_per_episode=max_steps_per_episode_hybrid,
         applicant_ids=[target_candidate_id]
     )
     
-    # Store results for this experiment
-    for key in experiment_results:
-        if key in training_metrics:
-            experiment_results[key].append(training_metrics[key])
+    # Store results for this agent_hybrid experiment
+    for key in experiment_results_hybrid:
+        if key in training_metrics_hybrid:
+            experiment_results_hybrid[key].append(training_metrics_hybrid[key])
     
-    # Save individual experiment results
-    exp_file = os.path.join(results_dir, f"experiment_{exp_idx+1}.pt")
-    torch.save(training_metrics, exp_file)
-    print(f"Saved experiment {exp_idx+1} results to {exp_file}")
+    # Save individual agent_hybrid experiment results
+    exp_file_hybrid = os.path.join(results_dir_hybrid, f"experiment_hybrid_{exp_idx+1}.pt")
+    torch.save(training_metrics_hybrid, exp_file_hybrid)
+    print(f"Saved agent_hybrid experiment {exp_idx+1} results to {exp_file_hybrid}")
 
-# Save aggregated results
-aggregated_file = os.path.join(results_dir, "aggregated_results.pt")
-torch.save(experiment_results, aggregated_file)
-print(f"Saved aggregated results to {aggregated_file}")
+# Save aggregated results for agent_hybrid
+aggregated_file_hybrid = os.path.join(results_dir_hybrid, "aggregated_results_hybrid.pt")
+torch.save(experiment_results_hybrid, aggregated_file_hybrid)
+print(f"Saved aggregated agent_hybrid results to {aggregated_file_hybrid}")
 
-# Visualize results using the Visualizer
+# Visualize results for agent_hybrid using the Visualizer
 visualizer.plot_experiment_results(
-    experiment_results=experiment_results,
-    title_prefix="Dyna-Q Performance",
-    filename_prefix="multi_experiment"
+    experiment_results=experiment_results_hybrid,
+    title_prefix=f"Dyna-Q Performance ({reward_strategy.upper()} Strategy)",
+    filename_prefix=f"multi_experiment_{reward_strategy}"
 )
 
-# Plot training metrics for the last experiment
-visualizer.plot_training_metrics(
-    metrics={
-        'q_losses': training_metrics['q_network_loss'],
-        'world_losses': training_metrics['world_model_loss'],
-        'episode_rewards': training_metrics['episode_reward']
-    },
-    title="Training Metrics (Last Experiment)"
-)
+# Plot training metrics for the last agent_hybrid experiment
+# Ensure training_metrics_hybrid holds the metrics from the last experiment
+if training_metrics_hybrid:
+    visualizer.plot_training_metrics(
+        metrics={
+            'q_losses': training_metrics_hybrid['q_network_loss'],
+            'world_losses': training_metrics_hybrid['world_model_loss'],
+            'episode_rewards': training_metrics_hybrid['episode_reward']
+        },
+        title=f"Training Metrics (Last {reward_strategy.upper()} Agent Experiment)"
+    )
 
-print("Multiple experiments completed successfully.")
+print(f"Multiple experiments for agent_hybrid ({reward_strategy} strategy) completed successfully.")
 
 # %% [markdown]
-# ## 10.1 Loading and Visualizing Saved Experiment Results
+# ## 7.1 Loading and Visualizing Saved Experiment Results
 # 
 # This section provides functionality to load and analyze results from previously run experiments.
 # This is useful for revisiting experiment results without having to rerun the experiments.
@@ -790,149 +769,139 @@ def load_experiment_results(results_dir):
 #     )
 
 # %% [markdown]
-# ## 11. Evaluation
+# ## 8. Evaluation
 # 
-# Finally, we'll evaluate the trained agent using the Evaluator class.
+# Finally, we evaluate the trained agents: `agent_cosine` (baseline) and `agent_hybrid`.
 # This will:
-# 1. Test the agent on a set of evaluation episodes
-# 2. Compare performance against baseline
-# 3. Generate evaluation metrics and visualizations
+# 1. Test both agents on a set of evaluation episodes.
+# 2. Compare their performance using the `Evaluator`.
+# 3. Generate evaluation metrics and visualizations.
 
 # %%
 # Evaluation parameters from config
 num_eval_episodes = EVAL_CONFIG["num_eval_episodes"]
-baseline_strategy = "cosine"  # Define the baseline strategy directly (e.g., 'cosine')
+# baseline_strategy is implicitly "cosine" due to agent_cosine's training
 
-print("Starting evaluation...")
+print("Starting evaluation: Comparing agent_cosine vs agent_hybrid...")
 
-# Create a baseline agent for comparison (NO db_connector)
-baseline_agent = DynaQAgent(
-    state_dim=MODEL_CONFIG["q_network"]["state_dim"],
-    action_dim=MODEL_CONFIG["q_network"]["action_dim"],
-    training_strategy=baseline_strategy,
-    device=device,
-    tensor_cache=tensor_cache  # Include tensor_cache
-)
+# Ensure agent_cosine and agent_hybrid are the trained instances from Block 9 and 10 respectively.
+# agent_cosine is fully trained after Block 9.
+# agent_hybrid is the instance from the last iteration of the experiment loop in Block 10.
 
-# Use evaluator's compare_agents method which internally calls evaluate_agent
+if agent_cosine is None or agent_hybrid is None:
+    raise RuntimeError("One or both agents (agent_cosine, agent_hybrid) are not defined. Ensure training blocks were run.")
+
+# The environment used for evaluation should be consistent for both agents.
+# Using the 'env' that was set up for the hybrid strategy, as it's more general
+# or can be adapted by the agents if their internal logic or the evaluator handles it.
+# If agent_cosine strictly requires a simpler env, that would need specific handling.
+# However, evaluate_agent primarily uses env.reset, env.get_valid_actions, env.get_action_vector, env.step.
+# The reward generation within env.step will apply to both if they use the same env instance.
+# For a fair comparison of learned policies, the evaluation environment should be the same.
+
+print(f"Evaluation will use environment of type: {env.__class__.__name__}")
+
+# Use evaluator's compare_agents method
 comparison_results = evaluator.compare_agents(
-    baseline_agent=baseline_agent,
-    pretrained_agent=agent,
+    baseline_agent=agent_cosine,    # Agent trained with cosine strategy in Block 9
+    pretrained_agent=agent_hybrid,  # Agent trained with hybrid strategy in Block 10 (final instance)
     env=env,
     applicant_ids=[target_candidate_id],
     num_episodes=num_eval_episodes
 )
 
 # Extract the results for visualization
-evaluation_results = {
-    'agent_rewards': comparison_results['pretrained']['episode_rewards'],
-    'baseline_rewards': comparison_results['baseline']['episode_rewards']
+# Note: 'pretrained' in comparison_results refers to agent_hybrid here
+evaluation_visualization_data = {
+    'agent_hybrid_rewards': comparison_results['pretrained']['episode_rewards'],
+    'agent_cosine_rewards': comparison_results['baseline']['episode_rewards']
 }
 
 # Plot evaluation results
 visualizer.plot_evaluation_results(
-    baseline_rewards=evaluation_results['baseline_rewards'],
-    pretrained_rewards=evaluation_results['agent_rewards'],
-    title="Evaluation Results"
+    baseline_rewards=evaluation_visualization_data['agent_cosine_rewards'],
+    pretrained_rewards=evaluation_visualization_data['agent_hybrid_rewards'],
+    title="Evaluation Results: Cosine Agent vs. Hybrid Agent"
 )
 
 print("Evaluation completed successfully.")
 
 # %% [markdown]
-# ## 12. Generate Job Recommendations
+# ## 9. Generate Job Recommendations
 # 
-# Now let's use our trained agent to generate personalized job recommendations for our target candidate. We'll:
+# Now let's use our trained `agent_hybrid` to generate personalized job recommendations for our target candidate. We'll:
 # 
-# 1. Use the trained Q-network to evaluate jobs
+# 1. Use the trained Q-network of `agent_hybrid` to evaluate jobs
 # 2. Select the top-K jobs with highest Q-values
 # 3. Display the recommendations along with job details
-# 
-# These recommendations represent the jobs the agent believes are most suitable for the candidate.
 
 # %%
 # Define testing parameters
 num_recommendations = EVAL_CONFIG["top_k_recommendations"]
-test_epsilon = 0.0  # No exploration during testing (pure exploitation)
+# test_epsilon = 0.0 is implicit in agent.select_action with eval_mode=True
 
 # Initialize lists to store recommendations
-recommended_jobs = []
-recommendation_scores = []
+recommended_jobs_hybrid = []
+recommendation_scores_hybrid = []
 
-# Get all valid job indices
-valid_job_indices = list(range(len(tensor_cache)))
-print(f"Found {len(valid_job_indices)} valid jobs in tensor cache for recommendations")
+# Get all valid job indices from tensor_cache
+valid_job_indices_reco = list(range(len(tensor_cache))) # Renamed to avoid conflict
+print(f"Found {len(valid_job_indices_reco)} valid jobs in tensor cache for recommendations using agent_hybrid")
 
-# Reset the environment to get the initial state
-state = env.reset(applicant_id=target_candidate_id)
+# Reset the environment to get the initial state (using the main 'env' instance)
+state_reco = env.reset(applicant_id=target_candidate_id) # Renamed for clarity
 
 # Create a copy of job indices to work with
-remaining_job_indices = valid_job_indices.copy()
+remaining_job_indices_reco = valid_job_indices_reco.copy()
 
-# Generate top-K recommendations
-for _ in range(min(num_recommendations, len(valid_job_indices))):
-    # Get job tensors for remaining indices from CACHE
-    action_tensors = [tensor_cache.get_job_vector_by_index(idx) for idx in remaining_job_indices]
+if agent_hybrid is None:
+    raise RuntimeError("agent_hybrid is not defined. Ensure training block 10 was run.")
+
+print(f"Generating top-{num_recommendations} recommendations using agent_hybrid...")
+# Generate top-K recommendations using agent_hybrid
+for _ in range(min(num_recommendations, len(valid_job_indices_reco))):
+    action_tensors_reco = [tensor_cache.get_job_vector_by_index(idx) for idx in remaining_job_indices_reco]
     
-    # Handle case where action_tensors might be empty if remaining_job_indices is empty
-    if not action_tensors:
+    if not action_tensors_reco:
         print("No more actions available to recommend.")
         break
         
-    # Select best job according to Q-network (using cache vectors)
-    # Ensure state is valid tensor
-    if not isinstance(state, torch.Tensor):
-         state = torch.tensor(state, device=device, dtype=torch.float32) # Ensure state is tensor
+    if not isinstance(state_reco, torch.Tensor):
+         state_reco = torch.tensor(state_reco, device=device, dtype=torch.float32)
          
-    # Pass the list of tensors directly
-    action_idx, _ = agent.select_action(state, action_tensors, eval_mode=True) 
+    action_idx_reco, _ = agent_hybrid.select_action(state_reco, action_tensors_reco, eval_mode=True) 
     
-    # Get the corresponding CACHE index
-    selected_cache_idx = remaining_job_indices[action_idx]
-    job_id = tensor_cache.get_job_id(selected_cache_idx) # Get original job ID using cache index
+    selected_cache_idx_reco = remaining_job_indices_reco[action_idx_reco]
+    job_id_reco = tensor_cache.get_job_id(selected_cache_idx_reco)
     
-    # Calculate Q-value for logging (using cache vector)
     with torch.no_grad():
-        # Ensure state_tensor is correctly shaped [1, state_dim]
-        state_tensor = state.unsqueeze(0) if state.dim() == 1 else state 
-        # Get action tensor from cache and ensure shape [1, action_dim]
-        job_tensor = tensor_cache.get_job_vector_by_index(selected_cache_idx).unsqueeze(0)
-        q_value = agent.q_network(state_tensor, job_tensor).item()
+        state_tensor_reco = state_reco.unsqueeze(0) if state_reco.dim() == 1 else state_reco 
+        job_tensor_reco = tensor_cache.get_job_vector_by_index(selected_cache_idx_reco).unsqueeze(0)
+        q_value_reco = agent_hybrid.q_network(state_tensor_reco, job_tensor_reco).item()
     
-    recommended_jobs.append(job_id)
-    recommendation_scores.append(q_value)
+    recommended_jobs_hybrid.append(job_id_reco)
+    recommendation_scores_hybrid.append(q_value_reco)
     
-    # Remove selected job (using its index within remaining_job_indices) from consideration for next selection
-    remaining_job_indices.pop(action_idx)
+    remaining_job_indices_reco.pop(action_idx_reco)
 
-# Display recommendations with details from CACHE METADATA
-print("\n=== Top Job Recommendations ===\n")
-for i, (job_id, score) in enumerate(zip(recommended_jobs, recommendation_scores)):
+# Display recommendations from agent_hybrid
+print(f"\n=== Top Job Recommendations from agent_hybrid ({reward_strategy} strategy) ===\n")
+for i, (job_id, score) in enumerate(zip(recommended_jobs_hybrid, recommendation_scores_hybrid)):
     print(f"Recommendation #{i+1}: [Q-Value: {score:.4f}]")
-    # Ensure job_id is the correct type (likely ObjectId initially)
-    # job_id_str = str(job_id) # No longer needed for lookup
-    print(f"Job ID: {job_id}") # ObjectId.__str__ handles printing
+    print(f"Job ID: {job_id}")
 
-    # Retrieve and display job details from TensorCache metadata
     try:
-        # Use the original ObjectId for metadata lookup
         job_details = tensor_cache.get_job_metadata(job_id)
         print(f"Title: {job_details.get('job_title', 'N/A')}")
-
-        # Display truncated description
         description = job_details.get('description', 'N/A')
         print(f"Description: {description[:100]}..." if len(description) > 100 else f"Description: {description}")
-
-        # Display technical skills if available in metadata
         if 'technical_skills' in job_details:
-            # Ensure skills are joinable (list of strings)
             skills = job_details['technical_skills']
             if isinstance(skills, list):
                  print(f"Technical Skills: {', '.join(map(str, skills))}")
             else:
-                 print(f"Technical Skills: {skills}") # Print as is if not a list
-
+                 print(f"Technical Skills: {skills}")
     except KeyError:
-        # Keep the string representation for the error message for readability
         job_id_str = str(job_id)
         print(f"Error: Metadata not found in TensorCache for job {job_id_str}")
     except Exception as e:
@@ -940,69 +909,65 @@ for i, (job_id, score) in enumerate(zip(recommended_jobs, recommendation_scores)
     print("-" * 50)
 
 # %% [markdown]
-# ## 13. Save Final Model Weights
+# ## 10 Save Final Model Weights (agent_hybrid)
 # 
 # This block explicitly saves the state dictionary of the trained Q-network 
-# to the results directory. This is useful for manually inspecting or 
-# reusing the trained weights, especially when running in environments like Colab.
+# from `agent_hybrid` to the results directory.
 
 # %%
-# Explicitly save the final Q-network weights
+# Explicitly save the final Q-network weights of agent_hybrid
 import os
 
 # Define the filename for the saved model
-# Ensure target_candidate_id is accessible (it should be from previous cells)
 try:
-    model_filename = f"q_network_final_{str(target_candidate_id)}.pt"
+    model_filename_hybrid = f"q_network_final_{reward_strategy}_{str(target_candidate_id)}.pt"
 except NameError:
-    model_filename = "q_network_final_unknown_candidate.pt"
-    print("Warning: target_candidate_id not found, using default filename.")
+    model_filename_hybrid = f"q_network_final_{reward_strategy}_unknown_candidate.pt"
+    print("Warning: target_candidate_id not found, using default filename for hybrid agent.")
 
-# Get the results directory from PATH_CONFIG
-# Ensure PATH_CONFIG is accessible
-try:
-    results_dir = PATH_CONFIG["results_dir"]
-except NameError:
-    results_dir = "../results" # Fallback path
-    print(f"Warning: PATH_CONFIG not found, using default results directory: {results_dir}")
+# Get the results directory from PATH_CONFIG (should be results_dir_hybrid or similar)
+# Using results_dir_hybrid which was defined in Block 10
+if 'results_dir_hybrid' not in locals():
+    print("Warning: results_dir_hybrid not defined. Attempting to use general results_dir.")
+    results_dir_final_save = PATH_CONFIG.get("results_dir", "../results")
+else:
+    results_dir_final_save = results_dir_hybrid
 
-# Ensure the results directory exists
-os.makedirs(results_dir, exist_ok=True)
+os.makedirs(results_dir_final_save, exist_ok=True)
 
 # Construct the full save path
-save_path = os.path.join(results_dir, model_filename)
+save_path_hybrid = os.path.join(results_dir_final_save, model_filename_hybrid)
 
-# Save the Q-network's state dictionary
-# Ensure agent and agent.q_network are accessible
+# Save the agent_hybrid's Q-network state dictionary
 try:
-    if agent and hasattr(agent, 'q_network'):
-        torch.save(agent.q_network.state_dict(), save_path)
-        print(f"Successfully saved Q-network weights to: {save_path}")
+    if agent_hybrid and hasattr(agent_hybrid, 'q_network'):
+        torch.save(agent_hybrid.q_network.state_dict(), save_path_hybrid)
+        print(f"Successfully saved agent_hybrid Q-network weights to: {save_path_hybrid}")
     else:
-        print("Error: Agent or Q-network not found. Cannot save weights.")
+        print("Error: agent_hybrid or its Q-network not found. Cannot save weights.")
 except Exception as e:
-    print(f"Error saving Q-network weights: {e}")
+    print(f"Error saving agent_hybrid Q-network weights: {e}")
 
 # %% [markdown]
-# ## 14. Conclusion and Next Steps
+# ## 11. Conclusion and Next Steps
 # 
 # In this notebook, we've implemented and demonstrated a Neural Dyna-Q job recommendation system. This approach combines the strengths of deep reinforcement learning with model-based planning to provide personalized job recommendations.
 # 
-# ### 14.1 Key Accomplishments
+# ### 11.1 Key Accomplishments
 # 
 # 1. **Data Integration**: Connected to the MongoDB database to retrieve real candidate and job data
 # 2. **Neural Networks**: Implemented deep Q-network and world model for value function and dynamics prediction
 # 3. **Dyna-Q Algorithm**: Combined direct RL with model-based planning for efficient learning
 # 4. **Personalized Recommendations**: Generated job recommendations tailored to a specific candidate
 # 
-# ### 14.2 Potential Improvements
+# ### 11.2 Potential Improvements
 # 
 # 1. **Extended Training**: Train for more episodes to improve recommendation quality
 # 2. **Hyperparameter Tuning**: Optimize learning rates, network architectures, and other parameters
 # 3. **Advanced Reward Functions**: Implement more sophisticated reward strategies using LLMs
 # 4. **User Feedback**: Incorporate real user feedback to improve recommendations
 # 
-# ### 14.3 Applications
+# ### 11.3 Applications
 # 
 # This system could be deployed as:
 # - A personalized job recommendation service for job seekers

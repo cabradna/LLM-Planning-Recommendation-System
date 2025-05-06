@@ -18,7 +18,7 @@ from pathlib import Path
 # Import configuration and modules
 import sys
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../../')))
-from config.config import TRAINING_CONFIG, PATH_CONFIG
+from config.config import TRAINING_CONFIG, PATH_CONFIG, STRATEGY_CONFIG
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../')))
 from models.q_network import QNetwork
@@ -96,10 +96,11 @@ class DynaQAgent:
         self.epsilon = self.epsilon_start
         
         # Hybrid strategy parameters
-        self.cosine_weight = kwargs.get("cosine_weight", 1.0)  # Start with full cosine weight if hybrid
-        self.cosine_annealing = kwargs.get("cosine_annealing", False)  # Whether to gradually reduce cosine weight
-        self.cosine_anneal_steps = kwargs.get("cosine_anneal_steps", 1000)  # Steps to anneal cosine weight
-        self.cosine_anneal_end = kwargs.get("cosine_anneal_end", 0.0)  # Final cosine weight after annealing
+        self.cosine_weight = kwargs.get("cosine_weight", STRATEGY_CONFIG["hybrid"]["initial_cosine_weight"])
+        # Determine if annealing is active based on annealing_episodes > 0
+        self.cosine_annealing = kwargs.get("cosine_annealing", STRATEGY_CONFIG["hybrid"]["annealing_episodes"] > 0)
+        self.cosine_anneal_steps = kwargs.get("cosine_anneal_steps", STRATEGY_CONFIG["hybrid"]["annealing_episodes"])
+        self.cosine_anneal_end = kwargs.get("cosine_anneal_end", STRATEGY_CONFIG["hybrid"]["final_cosine_weight"])
         
         # Create or use provided Q-Network
         self.q_network = q_network if q_network is not None else QNetwork(
