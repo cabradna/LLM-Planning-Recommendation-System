@@ -800,8 +800,8 @@ def load_experiment_results(results_dir):
 
 # %%
 # Evaluation parameters from config
-num_eval_episodes = EVAL_CONFIG["num_episodes"]
-baseline_strategy = EVAL_CONFIG["baseline_strategy"]
+num_eval_episodes = EVAL_CONFIG["num_eval_episodes"]
+baseline_strategy = "cosine"  # Define the baseline strategy directly (e.g., 'cosine')
 
 print("Starting evaluation...")
 
@@ -859,7 +859,7 @@ recommended_jobs = []
 recommendation_scores = []
 
 # Get all valid job indices
-valid_job_indices = list(range(len(tensor_cache.job_ids)))
+valid_job_indices = list(range(len(tensor_cache)))
 print(f"Found {len(valid_job_indices)} valid jobs in tensor cache for recommendations")
 
 # Reset the environment to get the initial state
@@ -909,19 +909,19 @@ print("\n=== Top Job Recommendations ===\n")
 for i, (job_id, score) in enumerate(zip(recommended_jobs, recommendation_scores)):
     print(f"Recommendation #{i+1}: [Q-Value: {score:.4f}]")
     # Ensure job_id is the correct type (likely ObjectId initially)
-    job_id_str = str(job_id) 
-    print(f"Job ID: {job_id_str}")
-    
+    # job_id_str = str(job_id) # No longer needed for lookup
+    print(f"Job ID: {job_id}") # ObjectId.__str__ handles printing
+
     # Retrieve and display job details from TensorCache metadata
     try:
-        # Use string representation for metadata lookup
-        job_details = tensor_cache.get_job_metadata(job_id_str) 
+        # Use the original ObjectId for metadata lookup
+        job_details = tensor_cache.get_job_metadata(job_id)
         print(f"Title: {job_details.get('job_title', 'N/A')}")
-        
+
         # Display truncated description
         description = job_details.get('description', 'N/A')
         print(f"Description: {description[:100]}..." if len(description) > 100 else f"Description: {description}")
-        
+
         # Display technical skills if available in metadata
         if 'technical_skills' in job_details:
             # Ensure skills are joinable (list of strings)
@@ -932,31 +932,77 @@ for i, (job_id, score) in enumerate(zip(recommended_jobs, recommendation_scores)
                  print(f"Technical Skills: {skills}") # Print as is if not a list
 
     except KeyError:
+        # Keep the string representation for the error message for readability
+        job_id_str = str(job_id)
         print(f"Error: Metadata not found in TensorCache for job {job_id_str}")
     except Exception as e:
         print(f"Error retrieving job details from cache: {e}")
     print("-" * 50)
 
 # %% [markdown]
-# ## 13. Conclusion and Next Steps
+# ## 13. Save Final Model Weights
+# 
+# This block explicitly saves the state dictionary of the trained Q-network 
+# to the results directory. This is useful for manually inspecting or 
+# reusing the trained weights, especially when running in environments like Colab.
+
+# %%
+# Explicitly save the final Q-network weights
+import os
+
+# Define the filename for the saved model
+# Ensure target_candidate_id is accessible (it should be from previous cells)
+try:
+    model_filename = f"q_network_final_{str(target_candidate_id)}.pt"
+except NameError:
+    model_filename = "q_network_final_unknown_candidate.pt"
+    print("Warning: target_candidate_id not found, using default filename.")
+
+# Get the results directory from PATH_CONFIG
+# Ensure PATH_CONFIG is accessible
+try:
+    results_dir = PATH_CONFIG["results_dir"]
+except NameError:
+    results_dir = "../results" # Fallback path
+    print(f"Warning: PATH_CONFIG not found, using default results directory: {results_dir}")
+
+# Ensure the results directory exists
+os.makedirs(results_dir, exist_ok=True)
+
+# Construct the full save path
+save_path = os.path.join(results_dir, model_filename)
+
+# Save the Q-network's state dictionary
+# Ensure agent and agent.q_network are accessible
+try:
+    if agent and hasattr(agent, 'q_network'):
+        torch.save(agent.q_network.state_dict(), save_path)
+        print(f"Successfully saved Q-network weights to: {save_path}")
+    else:
+        print("Error: Agent or Q-network not found. Cannot save weights.")
+except Exception as e:
+    print(f"Error saving Q-network weights: {e}")
+
+# %% [markdown]
+# ## 14. Conclusion and Next Steps
 # 
 # In this notebook, we've implemented and demonstrated a Neural Dyna-Q job recommendation system. This approach combines the strengths of deep reinforcement learning with model-based planning to provide personalized job recommendations.
 # 
-# ### 13.1 Key Accomplishments
+# ### 14.1 Key Accomplishments
 # 
 # 1. **Data Integration**: Connected to the MongoDB database to retrieve real candidate and job data
 # 2. **Neural Networks**: Implemented deep Q-network and world model for value function and dynamics prediction
 # 3. **Dyna-Q Algorithm**: Combined direct RL with model-based planning for efficient learning
 # 4. **Personalized Recommendations**: Generated job recommendations tailored to a specific candidate
 # 
-# ### 13.2 Potential Improvements
+# ### 14.2 Potential Improvements
 # 
 # 1. **Extended Training**: Train for more episodes to improve recommendation quality
 # 2. **Hyperparameter Tuning**: Optimize learning rates, network architectures, and other parameters
 # 3. **Advanced Reward Functions**: Implement more sophisticated reward strategies using LLMs
 # 4. **User Feedback**: Incorporate real user feedback to improve recommendations
 # 
-# ### 13.3 Applications
+# ### 14.3 Applications
 # 
 # This system could be deployed as:
 # - A personalized job recommendation service for job seekers
