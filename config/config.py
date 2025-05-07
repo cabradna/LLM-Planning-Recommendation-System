@@ -66,7 +66,7 @@ TRAINING_CONFIG = {
     "lr": 0.001,  # Learning rate
     "batch_size": 128,  # Batch size for training
     "target_update_freq": 100,  # Target network update frequency
-    "planning_steps": 10,  # Number of planning steps in Dyna-Q
+    "planning_steps": 5,  # Number of planning steps in Dyna-Q
     
     # Exploration parameters
     "epsilon_start": 1.0,  # Initial exploration rate
@@ -75,11 +75,11 @@ TRAINING_CONFIG = {
     
     # Buffer parameters
     "replay_buffer_size": 10000,  # Maximum replay buffer size
-    "min_replay_buffer_size": 300,  # Minimum buffer size before training starts
+    "min_replay_buffer_size": 1000,  # Minimum buffer size before training starts
 
     # Training process
-    "num_episodes": 200,  # Number of episodes
-    "max_steps_per_episode": 30,  # Maximum steps per episode
+    "num_episodes": 300,  # Number of episodes
+    "max_steps_per_episode": 50,  # Maximum steps per episode
     "eval_frequency": 10,  # Evaluation frequency (episodes)
     "save_frequency": 10,  # Model saving frequency (episodes)
 
@@ -98,7 +98,7 @@ TRAINING_CONFIG = {
 # Pretraining Configuration
 PRETRAINING_CONFIG = {
     "num_samples": 10000,  # Number of samples in pretraining dataset
-    "num_epochs": 200,  # Number of pretraining epochs
+    "num_epochs": 300,  # Number of pretraining epochs
     "batch_size": 128,  # Batch size for pretraining
     "lr": 0.001,  # Learning rate for pretraining
     "weight_decay": 1e-5,  # Weight decay for regularization

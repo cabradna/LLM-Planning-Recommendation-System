@@ -1,177 +1,113 @@
-# Refined Approach: LLM-Driven Dyna-Q for Enhanced Job Recommendation
+# LLM-Driven Dyna-Q for Enhanced Job Recommendation: Reinforcement Learning Formulation
 
-## Overview and Motivation: Tackling the Cold-Start Problem
+## 1. Overview and Motivation
 
-Recommender systems, especially those learning complex user preferences over time using Reinforcement Learning (RL), often face a significant challenge: the **cold-start problem**. When a new user (applicant) interacts with the system, or when the system is first deployed, it lacks historical data to make informed recommendations. Traditional RL agents, starting with randomly initialized policies, require numerous interactions – often involving suboptimal or irrelevant recommendations – before they learn effective strategies. This initial period of poor performance can lead to user frustration and abandonment, hindering the system's ability to gather the very data it needs to improve.
+This document details the Reinforcement Learning (RL) formulation for a job recommendation system. The primary challenge addressed is the **cold-start problem**, where traditional RL agents struggle due to a lack of initial interaction data. Our approach employs the Dyna-Q architecture, which integrates direct reinforcement learning with model-based planning, to enhance learning efficiency.
 
-Inspired by recent advancements leveraging Large Language Models (LLMs) in RL and recommendation, this project explores a novel approach to mitigate this cold-start issue in job recommendation. Our core idea is to **pre-train or train** the RL agent's value function (specifically, the Q-network within a Dyna-Q framework) using preferences and reward signals derived from different sources. We hypothesize that leveraging semantic similarity or sophisticated LLM simulations can provide valuable initial signal about job-applicant compatibility, leading to better initial policies.
+A key aspect of this work is the investigation of different reward generation strategies to guide the agent's learning, especially in the initial phases:
+1.  **Cosine Similarity Rewards**: Leveraging semantic similarity between applicant and job profiles.
+2.  **LLM-Simulated Rewards**: Using a Large Language Model (LLM) to simulate user feedback and generate richer reward signals.
+3.  **Hybrid Strategy**: A two-phase approach potentially combining an initial phase of training with semantic similarity rewards, followed by fine-tuning with LLM-simulated rewards.
 
-Specifically, we will investigate and compare **three distinct strategies** for generating the reward signals used to train the agent:
+The goal is to develop an agent that learns an effective policy for recommending jobs that maximize an applicant's cumulative satisfaction or success, represented by a discounted sum of rewards.
 
-1.  **Cosine Similarity:** Using a direct measure of semantic relevance.
-2.  **LLM Feedback Only:** Relying on an LLM user simulator for behavioral feedback.
-3.  **Hybrid Approach:** Combining cosine similarity pre-training with LLM feedback fine-tuning.
+## 2. Markov Decision Process (MDP) Formulation
 
-By comparing these approaches via a rigorous evaluation strategy, we aim to understand the trade-offs and effectiveness of different reward simulation techniques for mitigating the cold-start problem in RL-based job recommenders. The Dyna-Q architecture is chosen to enhance learning efficiency by combining direct interaction experiences with planning steps based on a learned model of the environment dynamics. Data for applicant states and job actions will be sourced from a MongoDB Atlas database (`rl_jobsdb`).
+The job recommendation task is modeled as a Markov Decision Process (MDP), defined by the tuple $(\mathcal{S}, \mathcal{A}, P, R, \gamma)$.
 
-This document outlines the proposed methodology, detailing the MDP formulation, the neural network components, data integration, the learning process, the specifics of each training strategy, and the evaluation plan.
+*   **Agent**: The recommendation system itself, tasked with learning and executing the job recommendation policy.
 
-## MDP Formulation: Modeling the Job Recommendation Process
+*   **Environment**: The context of an applicant's job search. This includes the applicant's profile, the available jobs, and the mechanism providing feedback on recommendations. The nature of this feedback, and thus the reward signal, varies based on the active training strategy.
 
-We formally model the job recommendation task as a Markov Decision Process (MDP), defined by the following components:
+*   **State Space ($\mathcal{S}$)**: A state $s_t \in \mathcal{S}$ at time step $t$ represents the relevant context of the applicant. It is defined as a vector embedding $v_{\text{applicant}, t}$ derived from the applicant's profile (e.g., concatenating embeddings of hard and soft skills).
+    $s_t = v_{\text{applicant}, t}$
+    In the current formulation, the applicant's profile features are considered static for the duration of an episode, meaning the state primarily serves to contextualize actions.
 
-* **Agent:** The recommendation system itself, responsible for learning and executing the recommendation policy.
-* **Environment:** The dynamic context of the job search. This includes the candidate's profile (sourced from MongoDB), the constantly changing pool of available jobs (sourced from MongoDB), and the mechanism that provides feedback on recommendations, which **differs based on the training strategy employed**.
-* **State ($s_t$):** A snapshot of the applicant's relevant context at a specific time step $t$. In the current phase, the state focuses on the applicant's qualifications and is represented by a vector `v_applicant_state, t` derived from MongoDB:
-    * `v_applicant_state, t` = `concat(`$v_{hard\_skills}, v_{soft\_skills}$`)`
-        * $v_{hard\_skills}$: Embedding derived from the applicant's hard skills (retrieved from `candidates_embeddings`).
-        * $v_{soft\_skills}$: Embedding derived from the applicant's soft skills (retrieved from `candidates_embeddings`).
-    * *Future Work (Phase 2):* The state will be augmented with dynamic interaction history (e.g., sequence of viewed/applied jobs) potentially processed by a model like SASRec.
-* **Action Space ($\mathcal{A}$):** The potentially vast set of all job postings available at time $t$ (represented in MongoDB, e.g., `all_jobs`).
-* **Action Selection ($a_t$):** Since $\mathcal{A}$ is too large to evaluate exhaustively, we use a practical approach:
-    1.  **Candidate Sampling:** At time $t$, sample a manageable subset $J_{candidates} \subset \mathcal{A}$ of size $n$. This might involve querying MongoDB based on heuristics.
-    2.  **Action Vector Retrieval:** Fetch the vector representation $v_{job}$ for each job $j \in J_{candidates}$ from the `job_embeddings` collection in MongoDB.
-    3.  **Q-Value Estimation:** For each job $j \in J_{candidates}$, use the neural Q-network to estimate its value in the current state: $Q(s_t, v_{job})$.
-    4.  **Policy Execution:** Select the action $a_t$ (the specific job `_id` corresponding to $v_{job,t}$) from $J_{candidates}$ based on the estimated Q-values, using an exploration strategy like $\epsilon$-greedy ($1-\epsilon$ probability of choosing the best action, $\epsilon$ probability of choosing randomly from candidates).
-    5.  **Recommendation (Output):** Present the top-$k$ jobs from $J_{candidates}$, ranked by their Q-values, to the user/simulator.
-* **Reward ($R_{t+1}$):** A numerical feedback signal received after the agent takes action $a_t$. **Crucially, how this reward is generated depends directly on the training strategy being used**, as detailed in the "Training Strategies and Reward Simulation" section below. It serves as the primary learning signal indicating the immediate success or failure of the recommendation $a_t$.
-* **State Transition ($P(s_{t+1}|s_t, a_t)$):** Describes the probability of moving to the next state $s_{t+1}$.
-    * **Current Phase:** Given the static nature of the state definition ($s_t$ only contains applicant profile embeddings), the state transition is trivial: $s_{t+1} = s_t$. The environment's dynamics are captured primarily within the reward signal.
-    * **Learned Model:** The World Model in Dyna-Q learns to predict the reward $\hat{R}$ and implicitly learns this trivial state transition $\hat{s}' = s_t$.
-* **Discount Factor ($\gamma$):** A hyperparameter ($0 \le \gamma \le 1$) determining the present value of future rewards in the Q-function calculation.
+*   **Action Space ($\mathcal{A}$)**: The set of all available jobs at time $t$. An action $a_t \in \mathcal{A}$ corresponds to recommending a specific job to the applicant. Similar to the state, an action is represented by a vector embedding $v_{\text{job}, t}$ derived from the job's features.
+    $a_t = v_{\text{job}, t}$
 
-## Data Integration with MongoDB (`rl_jobsdb`)
+*   **Policy ($\pi(a|s)$)**: The agent's policy dictates the probability of selecting action $a$ in state $s$. During training and execution, actions are selected from a candidate subset of jobs $J_{\text{candidates}} \subset \mathcal{A}$. An $\epsilon$-greedy strategy is employed for action selection:
+    *   With probability $1-\epsilon$, the agent selects the action (job) $a_t = \arg\max_{a \in J_{\text{candidates}}} Q(s_t, a; \theta)$, exploiting its current knowledge.
+    *   With probability $\epsilon$, the agent selects a random action from $J_{\text{candidates}}$, exploring the action space.
+    The exploration rate $\epsilon$ may be annealed over time.
 
-The neural networks rely on vector representations fetched from your MongoDB Atlas database (`rl_jobsdb`) using the `pymongo` library.
+*   **Reward Function ($R(s_t, a_t)$)**: The reward $R_{t+1}$ is a scalar feedback signal received after taking action $a_t$ in state $s_t$. Its generation is critically dependent on the active training strategy:
+    *   **Cosine Similarity Reward**: The reward is a direct measure of semantic similarity between the applicant state embedding and the recommended job action embedding:
+        \[ R_{t+1}^{\text{cosine}} = \frac{s_t \cdot a_t}{\|s_t\| \|a_t\|} \]
+        This reward may be scaled (e.g., to $[0, 1]$).
+    *   **LLM-Simulated Reward**: The reward is derived from an LLM acting as a user simulator. The LLM receives $s_t$ and $a_t$ (or their textual representations) and generates simulated user behavior (e.g., 'apply', 'ignore'). This behavior is then mapped to a scalar reward value:
+        \[ R_{t+1}^{\text{LLM}} = f_{\text{LLM}}(s_t, a_t) \]
+        where $f_{\text{LLM}}$ represents the LLM simulation and mapping process.
+    *   **Hybrid Reward Strategy**: This involves distinct training phases. In an initial phase, rewards might be $R_{t+1}^{\text{cosine}}$. In a subsequent fine-tuning phase, rewards switch to $R_{t+1}^{\text{LLM}}$, or a weighted combination.
 
-* **Connection:** The system establishes a connection to your MongoDB Atlas cluster and selects the `rl_jobsdb` database.
-* **State Vector Retrieval:** To construct $v_{applicant\_state}$ for an applicant, the system queries `candidates_embeddings`, retrieves pre-computed embedding arrays, and aggregates them (e.g., concatenation) into a PyTorch tensor.
-* **Action Vector Retrieval:** For candidate jobs $J_{candidates}$, the system queries `job_embeddings` using `original_job_id`s to fetch relevant embedding fields (e.g., `job_title_embeddings`, `tech_skills_vectors`) and combines them into the $v_{job}$ PyTorch tensor.
-* **Data Loading Pipeline:** This MongoDB interaction is managed within a data loading pipeline (e.g., PyTorch `Dataset` / `DataLoader`) for efficient batch preparation.
+*   **State Transition Dynamics ($P(s_{t+1}|s_t, a_t)$)**: Given the current formulation where the applicant's state $s_t$ is static within an episode (representing fixed applicant characteristics), the state transition is deterministic and trivial:
+    \[ s_{t+1} = s_t \]
+    The environment's dynamics are primarily captured through the reward signal, which reflects the immediate outcome of the recommendation $a_t$.
 
-## The Neural Network's Role: Approximating the Q-Function
+*   **Discount Factor ($\gamma$)**: A scalar $0 \le \gamma \le 1$ that determines the present value of future rewards. A value closer to 0 prioritizes immediate rewards, while a value closer to 1 gives more weight to long-term rewards.
 
-At the heart of our RL agent is a neural network acting as a **function approximator** for the **optimal action-value function (Q-function)**, $Q^*(s, a)$. This function predicts the expected total discounted future reward achievable from state $s$ by taking action $a$ and following the optimal policy thereafter:
-$$
-Q^*(s, a) = \mathbb{E}\left[ \sum_{k=0}^{\infty} \gamma^k R_{t+k+1} | s_t = s, a_t = a, \pi^* \right]
-$$
-Our network, parameterized by $\theta$, learns $Q(s, a; \theta) \approx Q^*(s, a)$.
+*   **Objective**: The agent's objective is to learn a policy $\pi^*$ that maximizes the expected discounted cumulative reward (return) from each state $s$:
+    \[ G_t = \sum_{k=0}^{\infty} \gamma^k R_{t+k+1} \]
 
-* **Input:** Concatenated state and action vectors $[v_{applicant\_state}, v_{job}]$, sourced from MongoDB.
-* **Output:** A single scalar estimated Q-value.
-* **Learning Goal:** Adjust $\theta$ to make the network's output accurately predict the expected return, learning the value of specific jobs for specific applicants.
+## 3. Value Function Approximation
 
-## Neural Network Architectures
+To find the optimal policy, we estimate the optimal action-value function $Q^*(s,a)$, which is the expected return starting from state $s$, taking action $a$, and thereafter following the optimal policy $\pi^*$:
+$$Q^*(s,a) = \mathbb{E}_{\pi^*} \left[ \sum_{k=0}^{\infty} \gamma^k R_{t+k+1} | s_t=s, a_t=a \right]$$
+This function is approximated using a neural network, the Q-Network, parameterized by weights $\theta$. So, $Q(s,a; \theta) \approx Q^*(s,a)$. The Q-network takes the concatenated state and action vectors $[s, a]$ as input and outputs a single scalar Q-value.
 
-### 1. Q-Network Architecture ($Q(s, a; \theta)$)
+## 4. Learning the Action-Value Function
 
-* **Purpose:** Estimate Q-values.
-* **Input:** Tensor `(batch_size, state_dim + action_dim)` from MongoDB embeddings.
-* **Architecture (MLP):** Standard Multi-Layer Perceptron.
-    * Input Layer: Size `state_dim + action_dim`.
-    * Hidden Layers: Sequence of `torch.nn.Linear` with `torch.nn.ReLU` (or similar) activations and `torch.nn.Dropout` for regularization. The number and size of layers are tunable hyperparameters.
-    * Output Layer: `torch.nn.Linear(H_last, 1)` (single scalar, no activation).
-* **Output:** Estimated Q-values `(batch_size, 1)`.
-* **Target Network ($Q(s, a; \theta^{-})$):** Identical architecture; weights $\theta^{-}$ copied periodically from $\theta$ for stable target calculation.
+The Q-Network's parameters $\theta$ are learned using a variant of Q-learning, incorporating experience replay and a target network.
 
-### 2. World Model Architecture ($\hat{P}(R | s, a)$)
+*   **Experience Replay**: Transitions $(s_t, a_t, R_{t+1}, s_{t+1})$ are stored in a replay buffer $\mathcal{D}$. During training, mini-batches are sampled from this buffer to update the network, breaking correlations and improving learning stability.
 
-* **Purpose:** Predict immediate reward $\hat{R}$ for Dyna-Q planning. (State prediction $\hat{s}'$ is trivial in this phase).
-* **Input:** Concatenated tensor `(batch_size, state_dim + action_dim)`.
-* **Architecture (MLP):** Similar MLP structure. Can be separate or share layers with Q-Network.
-    * Input Layer: Size `state_dim + action_dim`.
-    * Hidden Layers: `Linear` -> `ReLU` -> `Dropout` sequence.
-    * Output Layer: `torch.nn.Linear(H_last_model, 1)` predicting scalar reward $\hat{R}$.
-* **Output:** Predicted rewards `(batch_size, 1)`.
-* **Training:** Supervised learning on *real* experiences $(s_t, a_t, R_{t+1})$, minimizing MSE loss $(\hat{R} - R_{t+1})^2$. The target $R_{t+1}$ depends on the active training strategy.
+*   **Temporal Difference (TD) Learning**: The Q-Network is updated using TD learning. For a transition $(s_j, a_j, R_{j+1}, s_{j+1})$ sampled from $\mathcal{D}$:
+    *   The **current Q-value** is $Q(s_j, a_j; \theta)$.
+    *   The **target Q-value** ($y_j$) is constructed based on the observed reward $R_{j+1}$ and the estimated value of the next state using the target network $Q(s,a; \theta^{-})$ (see below). Crucially, reflecting the actual implementation, the target is calculated as:
+        \[ y_j = R_{j+1} + \gamma Q(s_{j+1}, a_j; \theta^{-}) \]
+        This target uses the action $a_j$ taken in state $s_j$ to evaluate the Q-value in the next state $s_{j+1}$. This differs from the standard Q-learning target which involves a $\max_{a'}$ operation over actions in $s_{j+1}$. This specific form implies that the value of taking action $a_j$ is assessed based on its immediate reward and the discounted future value assuming action $a_j$ (or an action with similar characteristics if $a_j$ itself is used as a proxy for the policy's choice in $s_{j+1}$) would be relevant for $s_{j+1}$. Given $s_{j+1} = s_j$, this effectively means the target is $R_{j+1} + \gamma Q(s_j, a_j; \theta^{-})$.
 
-## Learning the Q-Function: Loss Calculation and Training
+*   **Loss Function**: The Q-Network parameters $\theta$ are updated by minimizing the Mean Squared Error (MSE) between the current Q-value and the target Q-value:
+    \[ L(\theta) = \mathbb{E}_{(s_j,a_j,R_{j+1},s_{j+1}) \sim \mathcal{D}} \left[ (y_j - Q(s_j, a_j; \theta))^2 \right] \]
 
-The Q-network learns by minimizing the discrepancy (loss) between its predictions and a target value derived from the Bellman equation.
+*   **Optimization**: The loss is minimized using gradient descent-based optimization algorithms (e.g., Adam).
 
-**1. The Bellman Equation and the Target Q-Value ($y_t$):**
+*   **Target Network**: A separate target network $Q(s,a; \theta^{-})$ with parameters $\theta^{-}$ is used to compute the target values $y_j$. The weights $\theta^{-}$ are periodically copied from the online Q-Network's weights $\theta$ (i.e., $\theta^{-} \leftarrow \theta$). This helps stabilize learning by keeping the target values fixed for a period.
 
-The Bellman equation provides the foundation: $Q^*(s, a) = \mathbb{E}[R_{t+1} + \gamma \max_{a'} Q^*(s_{t+1}, a')]$. We use this to compute a target $y_t$ for each experience tuple $(s_t, a_t, R_{t+1}, s_{t+1})$:
-$$
-y_t = R_{t+1} + \gamma \max_{a' \in \mathcal{A}_{candidates, t+1}} Q(s_{t+1}, v_{job}'; \theta^{-})
-$$
+## 5. Dyna-Q Framework Integration
 
-* $R_{t+1}$: The immediate reward obtained according to the **active training strategy** (Cosine, LLM, or Hybrid phase).
-* $\gamma$: The discount factor.
-* $\max_{a'} Q(s_{t+1}, v_{job}'; \theta^{-})$: The **stable estimate** (using the target network $\theta^{-}$) of the maximum value achievable from the next state $s_{t+1}$ by choosing the best candidate action $a'$.
+The Dyna-Q architecture enhances sample efficiency by integrating direct RL, world model learning, and planning.
 
-The target $y_t$ represents a bootstrapped estimate of the true value of $(s_t, a_t)$, combining observed reward with estimated optimal future value.
+*   **Direct Reinforcement Learning**: The agent learns directly from real interactions with the environment. Experiences $(s_t, a_t, R_{t+1}, s_{t+1})$ are collected, where $R_{t+1}$ is determined by the active training strategy. These experiences are used to update the Q-Network $Q(s,a;\theta)$ as described in Section 4.
 
-**2. The Loss Function: Mean Squared Error (MSE):**
+*   **World Model Learning**: The agent learns a model of the environment's dynamics. Since state transitions are trivial ($s_{t+1}=s_t$), the world model $M(s,a;\phi)$ (parameterized by $\phi$) focuses on predicting the immediate reward:
+    \[ M(s,a;\phi) \approx R(s,a) \]
+    The world model is trained in a supervised manner using real experiences $(s_t, a_t, R_{t+1})$ by minimizing the MSE between the predicted reward $\hat{R}_t = M(s_t, a_t; \phi)$ and the actual reward $R_{t+1}$:
+    \[ L(\phi) = \mathbb{E}_{(s_t,a_t,R_{t+1}) \sim \mathcal{D}} \left[ (R_{t+1} - M(s_t, a_t; \phi))^2 \right] \]
 
-We minimize the squared difference between the Q-network's prediction and the target:
-$$
-\text{Loss}(\theta) = \mathbb{E}_{(s_t, a_t, R_{t+1}, s_{t+1}) \sim \mathcal{D}} \left[ \left( Q(s_t, v_{job, t}; \theta) - y_t \right)^2 \right]
-$$
+*   **Planning**: The learned world model is used to generate simulated experiences for additional Q-Network updates. The planning process involves:
+    1.  Sampling a previously experienced state-action pair $(s,a)$ from the replay buffer $\mathcal{D}$.
+    2.  Using the world model to predict the reward for this pair: $\hat{R} = M(s,a;\phi)$.
+    3.  Since $s' = s$, the simulated experience is $(s,a,\hat{R},s)$.
+    4.  Updating the Q-Network $Q(s,a;\theta)$ using this simulated experience. The target for this update is:
+        \[ \hat{y} = \hat{R} + \gamma Q(s, a; \theta^{-}) \]
+        This update rule is consistent with the one used for direct RL, using the Q-value of the same state-action pair $(s,a)$ for the next state's value, as the state is static.
+    This planning step is repeated for a number of iterations after each real interaction.
 
-* **Interpretation:** This Bellman error squared penalizes inaccuracies in the Q-network's current value estimates relative to the observed rewards and subsequent estimated values.
-* **Minimization:** Gradient descent adjusts $\theta$ to reduce this error, making $Q(s, a; \theta)$ converge towards $Q^*(s, a)$.
-* **Replay Buffer ($\mathcal{D}$):** Experiences are stored in a buffer $\mathcal{D}$ and sampled in mini-batches to compute the expected loss, improving stability.
+*   **Overall Dyna-Q Process**:
+    1.  Interact with the environment: $s_t \xrightarrow{a_t} R_{t+1}, s_{t+1}$. Store $(s_t, a_t, R_{t+1}, s_{t+1})$ in $\mathcal{D}$.
+    2.  Direct RL Update: Update $Q(s,a;\theta)$ using a batch from $\mathcal{D}$.
+    3.  Model Learning Update: Update $M(s,a;\phi)$ using a batch from $\mathcal{D}$.
+    4.  Planning: Perform $N$ planning steps. Each step involves sampling $(s,a)$ from $\mathcal{D}$, generating $\hat{R}$ via $M(s,a;\phi)$, and updating $Q(s,a;\theta)$ using $(s,a,\hat{R},s)$.
 
-**3. Optimization:**
+## 6. Training Strategies in the Dyna-Q Context
 
-Use **backpropagation** to compute gradients $\nabla_\theta \text{Loss}(\theta)$ and update $\theta$ with an optimizer like Adam or RMSprop.
+The choice of reward strategy (Cosine, LLM, Hybrid) directly influences the $R_{t+1}$ values used in both the direct RL updates and for training the world model $M(s,a;\phi)$.
 
-## Training Strategies and Reward Simulation
+*   **Cosine Similarity Strategy**: The agent (`agent_cosine`) can be trained using a dataset where rewards are pre-calculated cosine similarities. This training updates both the Q-Network and the World Model based on these semantic rewards. The World Model thus learns to predict cosine similarity.
+*   **Hybrid LLM Strategy**: The agent (`agent_hybrid`) is trained online.
+    *   **Direct RL**: The $R_{t+1}$ comes from the `HybridEnv` (which may combine LLM feedback and cosine similarity, possibly with annealing weights for the cosine component).
+    *   **Model Learning**: The World Model learns to predict these (potentially complex or hybrid) rewards from the `HybridEnv`.
+    *   **Planning**: The Q-Network is updated using rewards simulated by this learned World Model.
 
-A core part of this project is comparing how different methods of simulating the reward signal $R_{t+1}$ impact the agent's learning and initial performance.
-
-### Strategy 1: Cosine Similarity Rewards
-
-* **Concept:** Reward is based on the direct semantic similarity between applicant and job embeddings.
-* **Reward Calculation ($R_{t+1}$):**
-    $$
-    R_{t+1} = \frac{v_{applicant\_state, t} \cdot v_{job, t}}{\|v_{applicant\_state, t}\| \|v_{job, t}\|}
-    $$
-    Vectors $v_{applicant\_state, t}$ (from `candidates_embeddings`) and $v_{job, t}$ (from `job_embeddings`) are fetched via `pymongo`. The specific fields within the embeddings used for the calculation (e.g., concatenating hard/soft skill vectors) need to be defined.
-* **Training Impact:** Provides a fast, cheap reward signal driving the agent to recommend semantically similar jobs. The World Model learns to predict this similarity score.
-
-### Strategy 2: LLM Feedback Only Rewards
-
-* **Concept:** Uses an LLM as a user simulator to generate richer, behavior-based feedback.
-* **Reward Calculation ($R_{t+1}$):**
-    1.  Present state $s_t$ and action $a_t$ (job details) to the LLM simulator.
-    2.  LLM generates a simulated action (e.g., 'APPLY', 'SAVE', 'IGNORE').
-    3.  Map this simulated action to a scalar reward (e.g., 'APPLY' -> +1.0, 'SAVE' -> +0.5, 'IGNORE' -> -0.1).
-* **Training Impact:** Trains the agent based on potentially complex, simulated user preferences. The World Model learns to predict the LLM's reward output. More computationally expensive and relies heavily on simulator fidelity.
-
-### Strategy 3: Hybrid (Cosine Pre-training + LLM Fine-tuning)
-
-* **Concept:** A two-stage "scaffolding" approach.
-* **Phase 1 (Pre-training):** Train the Q-network and World Model using **Cosine Similarity** rewards (Strategy 1). Establishes a semantically grounded initial policy.
-* **Phase 2 (Fine-tuning):** Continue training the networks initialized from Phase 1, but **switch the reward source** to **LLM Feedback** (Strategy 2). Refines the policy using simulated behavioral signals.
-* **Training Impact:** Aims to leverage the speed of cosine similarity for initial learning and the richness of LLM feedback for later refinement.
-
-## Integration with Dyna-Q: Combining Real and Simulated Experience
-
-Dyna-Q utilizes the selected training strategy within its loop:
-
-1.  **Pre-training Phase (Optional, esp. for Hybrid):** Train $Q(s, a; \theta)$ and $\hat{P}(R | s, a)$ using either Cosine or LLM rewards (depending on the strategy) before starting the main loop. For Hybrid, this *is* Phase 1 using Cosine rewards.
-2.  **Online Phase (Dyna-Q Loop):**
-    * **a) Direct RL:**
-        * Agent selects action $a_t$ using $Q(s, a; \theta)$.
-        * Environment provides *real* reward $R_{t+1}$ based on the **currently active strategy** (Cosine, LLM, or Hybrid Phase 2's LLM reward) and next state $s_{t+1}$.
-        * Store $(s_t, a_t, R_{t+1}, s_{t+1})$ in $\mathcal{D}_{real}$.
-        * Perform Q-learning update on $\theta$ using a batch from $\mathcal{D}_{real}$ and the target $y_t$ (which uses $R_{t+1}$ from the active strategy).
-    * **b) Model Learning:**
-        * Train World Model $\hat{P}$ on batches from $\mathcal{D}_{real}$ to predict the reward $R_{t+1}$ (from the active strategy).
-    * **c) Planning:**
-        * Sample past $(s, a)$ from $\mathcal{D}_{real}$.
-        * Use World Model $\hat{P}$ to predict simulated reward $\hat{R}$.
-        * Perform Q-learning update on $\theta$ using simulated experience $(s, a, \hat{R}, s)$ and target $y_{sim} = \hat{R} + \gamma \max_{a'} Q(s, a'; \theta^{-})$.
-
-## Evaluation Strategy: Comparing Training Strategies
-
-The evaluation will rigorously compare the three training strategies and a baseline.
-
-* **Core Hypothesis:** Pre-training or training with simulated rewards (Cosine or LLM-based) improves initial ("cold-start") performance compared to random initialization. The Hybrid approach may offer the best balance.
-* **Evaluation Methodology:**
-    * Train agents using each of the three strategies and a baseline (random start).
-    * Evaluate all agents in a separate, consistent simulated online environment (fetching data from MongoDB).
-    * Compare performance using metrics focused on **initial learning phase** (e.g., cumulative reward in first N episodes/steps, average reward, steps-to-threshold) and long-term convergence.
-* **Expected Outcome:** Quantify the benefits of each strategy in mitigating cold start, providing insights into whether semantic similarity, complex LLM simulation, or a hybrid combination is most effective for initializing the RL job recommender.
+This formulation provides a foundation for understanding how the agent learns to make job recommendations by interacting with its environment (real or simulated) and refining its value estimates and world model over time.

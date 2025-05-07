@@ -948,32 +948,104 @@ try:
 except Exception as e:
     print(f"Error saving agent_hybrid Q-network weights: {e}")
 
+# %%
 # %% [markdown]
-# ## 11. Conclusion and Next Steps
-# 
-# In this notebook, we've implemented and demonstrated a Neural Dyna-Q job recommendation system. This approach combines the strengths of deep reinforcement learning with model-based planning to provide personalized job recommendations.
-# 
-# ### 11.1 Key Accomplishments
-# 
-# 1. **Data Integration**: Connected to the MongoDB database to retrieve real candidate and job data
-# 2. **Neural Networks**: Implemented deep Q-network and world model for value function and dynamics prediction
-# 3. **Dyna-Q Algorithm**: Combined direct RL with model-based planning for efficient learning
-# 4. **Personalized Recommendations**: Generated job recommendations tailored to a specific candidate
-# 
-# ### 11.2 Potential Improvements
-# 
-# 1. **Extended Training**: Train for more episodes to improve recommendation quality
-# 2. **Hyperparameter Tuning**: Optimize learning rates, network architectures, and other parameters
-# 3. **Advanced Reward Functions**: Implement more sophisticated reward strategies using LLMs
-# 4. **User Feedback**: Incorporate real user feedback to improve recommendations
-# 
-# ### 11.3 Applications
-# 
-# This system could be deployed as:
-# - A personalized job recommendation service for job seekers
-# - A candidate-job matching tool for recruiters
-# - A component in a larger career guidance system
+# ## 10.1 Download All Results
+#
+# This block provides functionality to download all generated results, including model weights, training metrics, and evaluation outputs. It targets two primary locations based on common project structures and user clarification:
+# - The main results directory at the project root (e.g., `project_root/results/`)
+# - The results directory possibly within a `src` folder (e.g., `project_root/src/results/`)
+#
+# If running in Google Colab, this will zip the contents of these directories and initiate a download. Otherwise, it will print the absolute paths for manual retrieval.
+# It relies on the `project_root` variable being correctly defined in earlier cells.
 
+# %%
+# Imports for this cell
+import os
+import shutil
+from pathlib import Path
+# sys should be imported globally for 'google.colab' check
+import sys 
+
+# Determine project_root to use for this cell
+# It's expected that 'project_root' is defined and correct from previous cells.
+current_project_root_dl = None
+if 'project_root' in locals() and isinstance(project_root, Path):
+    current_project_root_dl = project_root
+    print(f"Using project_root defined in previous cells: {current_project_root_dl}")
+else:
+    print("Warning: 'project_root' variable from previous cells not found or not a Path object.")
+    try:
+        # Fallback: if __file__ is defined, assume notebook is at project root.
+        # This is based on the current file path context.
+        current_project_root_dl = Path(__file__).resolve().parent
+        print(f"Determined project root using __file__.parent: {current_project_root_dl}")
+    except NameError:
+        # Absolute fallback to CWD if __file__ is not defined (e.g. some interactive setups)
+        current_project_root_dl = Path('.').resolve()
+        print(f"Using current working directory as project root (fallback): {current_project_root_dl}")
+    print("Please ensure this path correctly points to your project's root directory.")
+
+
+# Define the paths to the results directories, relative to the project root
+# Based on user clarification: "src/results/" and "results/" (at project root)
+results_path_src_dl = current_project_root_dl / "src" / "results"
+results_path_root_dl = current_project_root_dl / "results"
+
+# List of directories to process
+dirs_to_download_dl = [
+    {"name": "project_root_results", "path": results_path_root_dl, "description": "Project Root Results (results/)"},
+    {"name": "src_results", "path": results_path_src_dl, "description": "Source Results (src/results/)"}
+]
+
+# Determine if running in Google Colab
+IN_COLAB_DL = 'google.colab' in sys.modules
+
+if IN_COLAB_DL:
+    from google.colab import files
+    print("Running in Google Colab. Will attempt to zip and download results.")
+else:
+    print("Not running in Google Colab. Paths to results will be printed for manual access.")
+
+for dir_info in dirs_to_download_dl:
+    dir_path = dir_info["path"]
+    dir_zip_name = dir_info["name"] # Name for the zip file stem
+    dir_desc = dir_info["description"]
+    
+    print(f"\nProcessing directory: {dir_desc} at {dir_path}")
+
+    if dir_path.exists() and dir_path.is_dir():
+        if IN_COLAB_DL:
+            # Define the full path for the zip file stem (e.g. /content/project_root_results)
+            # .zip will be added by make_archive
+            zip_file_stem_path = current_project_root_dl / dir_zip_name
+            zip_final_path = current_project_root_dl / (dir_zip_name + ".zip")
+            
+            print(f"Zipping contents of {dir_path} to {zip_final_path}...")
+            try:
+                shutil.make_archive(str(zip_file_stem_path), 'zip', root_dir=str(dir_path))
+                print(f"Successfully created zip file: {zip_final_path}")
+                
+                print(f"Starting download of {zip_final_path}...")
+                files.download(str(zip_final_path))
+                print(f"Download initiated for {zip_final_path}.")
+                
+                # Clean up the temporary zip file
+                os.remove(zip_final_path)
+                print(f"Removed temporary zip file: {zip_final_path}")
+
+            except Exception as e:
+                print(f"Error during zipping, downloading, or cleanup for {dir_path}: {e}")
+                # If zip was created but download/removal failed, it might still be there.
+                if zip_final_path.exists():
+                    print(f"Temporary zip file {zip_final_path} might still exist. You may want to remove it manually.")
+        else: # Not in Colab
+            print(f"Results directory found at: {dir_path.resolve()}")
+            print(f"Please navigate to this directory ({dir_desc}) to access the files manually.")
+    else:
+        print(f"Directory {dir_path} ({dir_desc}) does not exist or is not a directory. Skipping.")
+
+print("\nFinished processing all specified results directories for download.")
 # %%
 # Clean up resources
 db_connector.close()
