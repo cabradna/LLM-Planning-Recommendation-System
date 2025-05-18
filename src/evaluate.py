@@ -16,21 +16,25 @@ from typing import List, Dict, Tuple, Optional, Any
 
 # Add the project root directory to the path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from config.config import MODEL_CONFIG, TRAINING_CONFIG, EVAL_CONFIG, PATH_CONFIG
+from config.config import MODEL_CONFIG, TRAINING_CONFIG, EVAL_CONFIG, PATH_CONFIG, STRATEGY_CONFIG, ENV_CONFIG
 
 # Import modules
 from data.database import DatabaseConnector
-from environments.job_env import JobRecommendationEnv, LLMSimulatorEnv
+from data.tensor_cache import TensorCache
+from environments.job_env import JobRecommendationEnv, LLMSimulatorEnv, HybridEnv
+from models.q_network import QNetwork
+from models.world_model import WorldModel
 from training.agent import DynaQAgent
-from utils.evaluator import Evaluator
 from utils.visualizer import Visualizer
+from utils.evaluator import Evaluator
+from train import train_baseline_agent, train_pretrained_agent
 
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler("evaluation.log"),
+        logging.FileHandler("evaluate.log"),
         logging.StreamHandler()
     ]
 )
@@ -120,6 +124,14 @@ def compare_baseline_and_pretrained(baseline_agent: DynaQAgent, pretrained_agent
     logger.info(f"  Reward improvement: {comparison['improvements']['avg_reward']:.2f}%")
     logger.info(f"  Apply rate improvement: {comparison['improvements']['apply_rate']:.2f}%")
     
+    # Visualize comparison
+    visualizer = Visualizer()
+    visualizer.plot_evaluation_results(
+        baseline_rewards=comparison['baseline']['episode_rewards'],
+        pretrained_rewards=comparison['pretrained']['episode_rewards'],
+        title="Evaluation Results: Baseline vs. Pretrained"
+    )
+    
     return comparison
 
 def evaluate_cold_start_performance(baseline_agent: DynaQAgent, pretrained_agent: DynaQAgent,
@@ -151,25 +163,39 @@ def evaluate_cold_start_performance(baseline_agent: DynaQAgent, pretrained_agent
         applicant_id = random.choice(applicant_ids)
         
         # Evaluate baseline agent
-        env.reset(applicant_id)
+        env.reset(applicant_id=applicant_id)
         baseline_reward = 0
         for step in range(num_steps):
-            valid_action_indices = env.get_valid_actions()
-            available_actions = [env.get_action_vector(idx) for idx in valid_action_indices]
-            action_idx, _ = baseline_agent.select_action(env.current_state, available_actions, eval_mode=True)
-            _, reward, _, _ = env.step(action_idx)
+            valid_job_indices = env.get_valid_actions()
+            if not valid_job_indices:
+                logger.warning(f"No valid actions available for applicant {applicant_id} at step {step}")
+                break
+                
+            action_tensors = [env.tensor_cache.get_job_vector_by_index(idx) for idx in valid_job_indices]
+            action_idx, _ = baseline_agent.select_action(env.current_state, action_tensors, eval_mode=True)
+            job_idx = valid_job_indices[action_idx]
+            _, reward, done, _ = env.step(job_idx)
             baseline_reward += reward
+            if done:
+                break
         baseline_episode_rewards.append(baseline_reward)
         
         # Evaluate pretrained agent (reuse same applicant for fair comparison)
-        env.reset(applicant_id)
+        env.reset(applicant_id=applicant_id)
         pretrained_reward = 0
         for step in range(num_steps):
-            valid_action_indices = env.get_valid_actions()
-            available_actions = [env.get_action_vector(idx) for idx in valid_action_indices]
-            action_idx, _ = pretrained_agent.select_action(env.current_state, available_actions, eval_mode=True)
-            _, reward, _, _ = env.step(action_idx)
+            valid_job_indices = env.get_valid_actions()
+            if not valid_job_indices:
+                logger.warning(f"No valid actions available for applicant {applicant_id} at step {step}")
+                break
+                
+            action_tensors = [env.tensor_cache.get_job_vector_by_index(idx) for idx in valid_job_indices]
+            action_idx, _ = pretrained_agent.select_action(env.current_state, action_tensors, eval_mode=True)
+            job_idx = valid_job_indices[action_idx]
+            _, reward, done, _ = env.step(job_idx)
             pretrained_reward += reward
+            if done:
+                break
         pretrained_episode_rewards.append(pretrained_reward)
         
         logger.info(f"Episode {episode+1}: Baseline reward = {baseline_reward:.2f}, "
@@ -235,6 +261,16 @@ def evaluate_performance_over_time(agent: DynaQAgent, env: JobRecommendationEnv,
         eval_interval=min(steps)
     )
     
+    # Visualize results
+    visualizer = Visualizer()
+    visualizer.plot_training_curves(
+        train_values=results['rewards'],
+        title="Agent Performance Over Time",
+        xlabel="Episode",
+        ylabel="Reward",
+        save_path="performance_over_time.png"
+    )
+    
     return results
 
 def main(args: argparse.Namespace) -> None:
@@ -250,23 +286,149 @@ def main(args: argparse.Namespace) -> None:
     # Initialize database connector
     db_connector = DatabaseConnector()
     
-    # Get sample applicant IDs (simplified - in practice, would fetch from DB)
-    # In a real scenario, you would query your MongoDB for a list of applicant IDs
-    # For now, we use placeholder IDs
-    sample_applicant_ids = [f"applicant_{i}" for i in range(100)]
+    # Initialize TensorCache
+    tensor_cache = TensorCache(device=args.device)
+    logger.info(f"Initializing TensorCache on {args.device}")
     
-    # Create evaluation environment
-    if args.use_llm_simulator:
-        env = LLMSimulatorEnv(db_connector=db_connector, random_seed=args.seed)
+    # Get sample applicant IDs
+    try:
+        collection = db_connector.db[db_connector.collections["candidates_text"]]
+        applicant_ids = [doc["_id"] for doc in collection.find({}, {"_id": 1}).limit(args.num_applicants)]
+        if not applicant_ids:
+            raise ValueError("No applicant IDs found in the database")
+        target_applicant_id = applicant_ids[0]
+        logger.info(f"Selected target applicant ID: {target_applicant_id}")
+    except Exception as e:
+        logger.error(f"Error selecting target applicant: {e}")
+        sys.exit(1)
+    
+    # Copy data from database to TensorCache
+    tensor_cache.copy_from_database(
+        db_connector=db_connector,
+        applicant_ids=applicant_ids
+    )
+    stats = tensor_cache.cache_stats()
+    logger.info(f"Cache initialized with {stats['job_count']} jobs and {stats['applicant_state_count']} applicant states")
+    
+    # Create evaluation environment based on reward strategy
+    if args.reward_strategy == "cosine":
+        env = JobRecommendationEnv(
+            tensor_cache=tensor_cache,
+            reward_scheme=STRATEGY_CONFIG["llm"]["response_mapping"],
+            reward_strategy="cosine",
+            random_seed=ENV_CONFIG["random_seed"]
+        )
+    elif args.reward_strategy == "llm":
+        env = LLMSimulatorEnv(
+            tensor_cache=tensor_cache,
+            reward_scheme=STRATEGY_CONFIG["llm"]["response_mapping"],
+            random_seed=ENV_CONFIG["random_seed"]
+        )
+        
+        # Setup LLM if needed
+        if args.use_llm_simulator:
+            try:
+                from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+                from huggingface_hub import login
+                
+                # Get token path from config and read token
+                from config.config import HF_CONFIG
+                token_path = HF_CONFIG["token_path"]
+                if not os.path.isabs(token_path):
+                    token_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), token_path)
+                    
+                with open(token_path, "r") as f:
+                    token = f.read().strip()
+                
+                # Login to Hugging Face
+                login(token=token)
+                logger.info(f"Successfully logged in to Hugging Face")
+                
+                # Load model and tokenizer
+                model_id = STRATEGY_CONFIG["llm"]["model_id"]
+                bnb_config = BitsAndBytesConfig(
+                    load_in_4bit=STRATEGY_CONFIG["llm"]["quantization"]["load_in_4bit"],
+                    bnb_4bit_quant_type=STRATEGY_CONFIG["llm"]["quantization"]["quant_type"],
+                    bnb_4bit_use_nested_quant=STRATEGY_CONFIG["llm"]["quantization"]["use_nested_quant"],
+                    bnb_4bit_compute_dtype=torch.bfloat16
+                )
+                
+                logger.info(f"Loading LLM model {model_id}")
+                tokenizer = AutoTokenizer.from_pretrained(model_id)
+                llm_model = AutoModelForCausalLM.from_pretrained(
+                    model_id,
+                    quantization_config=bnb_config,
+                    device_map="auto"
+                )
+                
+                # Setup LLM in environment
+                env = env.setup_llm(llm_model, tokenizer, device="auto")
+                logger.info(f"LLM model set up in environment")
+            except Exception as e:
+                logger.error(f"Failed to set up LLM: {e}")
+                sys.exit(1)
+    elif args.reward_strategy == "hybrid":
+        env = HybridEnv(
+            tensor_cache=tensor_cache,
+            reward_scheme=STRATEGY_CONFIG["llm"]["response_mapping"],
+            cosine_weight=STRATEGY_CONFIG["hybrid"]["initial_cosine_weight"],
+            random_seed=ENV_CONFIG["random_seed"]
+        )
+        
+        # Setup LLM if needed
+        if args.use_llm_simulator:
+            try:
+                from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+                from huggingface_hub import login
+                
+                # Get token path from config and read token
+                from config.config import HF_CONFIG
+                token_path = HF_CONFIG["token_path"]
+                if not os.path.isabs(token_path):
+                    token_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), token_path)
+                    
+                with open(token_path, "r") as f:
+                    token = f.read().strip()
+                
+                # Login to Hugging Face
+                login(token=token)
+                logger.info(f"Successfully logged in to Hugging Face")
+                
+                # Load model and tokenizer
+                model_id = STRATEGY_CONFIG["llm"]["model_id"]
+                bnb_config = BitsAndBytesConfig(
+                    load_in_4bit=STRATEGY_CONFIG["llm"]["quantization"]["load_in_4bit"],
+                    bnb_4bit_quant_type=STRATEGY_CONFIG["llm"]["quantization"]["quant_type"],
+                    bnb_4bit_use_nested_quant=STRATEGY_CONFIG["llm"]["quantization"]["use_nested_quant"],
+                    bnb_4bit_compute_dtype=torch.bfloat16
+                )
+                
+                logger.info(f"Loading LLM model {model_id}")
+                tokenizer = AutoTokenizer.from_pretrained(model_id)
+                llm_model = AutoModelForCausalLM.from_pretrained(
+                    model_id,
+                    quantization_config=bnb_config,
+                    device_map="auto"
+                )
+                
+                # Setup LLM in environment
+                env = env.setup_llm(llm_model, tokenizer, device="auto")
+                logger.info(f"LLM model set up in environment")
+            except Exception as e:
+                logger.error(f"Failed to set up LLM: {e}")
+                sys.exit(1)
     else:
-        env = JobRecommendationEnv(db_connector=db_connector, random_seed=args.seed)
+        logger.error(f"Invalid reward strategy: {args.reward_strategy}")
+        sys.exit(1)
     
-    # Load models
+    logger.info(f"Created {env.__class__.__name__} with '{args.reward_strategy}' reward strategy")
+    
+    # Load agents
     device = torch.device(args.device)
     
     # Load baseline agent
     baseline_path = args.baseline_path or os.path.join(
-        os.path.dirname(__file__), PATH_CONFIG["model_dir"], "baseline"
+        PATH_CONFIG["model_dir"], "baseline"
     )
     logger.info(f"Loading baseline agent from {baseline_path}")
     baseline_agent = DynaQAgent.load_models(
@@ -275,9 +437,12 @@ def main(args: argparse.Namespace) -> None:
         device=device
     )
     
+    # Set tensor_cache for baseline agent
+    baseline_agent.tensor_cache = tensor_cache
+    
     # Load pretrained agent
     pretrained_path = args.pretrained_path or os.path.join(
-        os.path.dirname(__file__), PATH_CONFIG["model_dir"], "pretrained"
+        PATH_CONFIG["model_dir"], "pretrained"
     )
     logger.info(f"Loading pretrained agent from {pretrained_path}")
     pretrained_agent = DynaQAgent.load_models(
@@ -286,13 +451,16 @@ def main(args: argparse.Namespace) -> None:
         device=device
     )
     
+    # Set tensor_cache for pretrained agent
+    pretrained_agent.tensor_cache = tensor_cache
+    
     # Run evaluations based on command-line arguments
     if args.evaluate_baseline:
         logger.info("Evaluating baseline agent")
         evaluate_model_performance(
             agent=baseline_agent,
             env=env,
-            applicant_ids=sample_applicant_ids,
+            applicant_ids=applicant_ids,
             num_episodes=args.num_episodes,
             agent_name="Baseline Agent"
         )
@@ -302,7 +470,7 @@ def main(args: argparse.Namespace) -> None:
         evaluate_model_performance(
             agent=pretrained_agent,
             env=env,
-            applicant_ids=sample_applicant_ids,
+            applicant_ids=applicant_ids,
             num_episodes=args.num_episodes,
             agent_name="Pretrained Agent"
         )
@@ -313,7 +481,7 @@ def main(args: argparse.Namespace) -> None:
             baseline_agent=baseline_agent,
             pretrained_agent=pretrained_agent,
             env=env,
-            applicant_ids=sample_applicant_ids,
+            applicant_ids=applicant_ids,
             num_episodes=args.num_episodes
         )
     
@@ -323,7 +491,7 @@ def main(args: argparse.Namespace) -> None:
             baseline_agent=baseline_agent,
             pretrained_agent=pretrained_agent,
             env=env,
-            applicant_ids=sample_applicant_ids,
+            applicant_ids=applicant_ids,
             num_episodes=args.cold_start_episodes,
             num_steps=args.cold_start_steps
         )
@@ -333,12 +501,22 @@ def main(args: argparse.Namespace) -> None:
         evaluate_performance_over_time(
             agent=pretrained_agent,
             env=env,
-            applicant_ids=sample_applicant_ids,
+            applicant_ids=applicant_ids,
             steps=list(range(0, args.num_episodes, args.eval_interval))
         )
     
     # Close database connection
     db_connector.close()
+    
+    # Clean up resources
+    if tensor_cache is not None and hasattr(tensor_cache, 'clear'):
+        tensor_cache.clear()
+        logger.info("Tensor cache cleared")
+        
+    # Free PyTorch memory
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        logger.info("CUDA cache emptied")
     
     logger.info("Evaluation complete")
 
@@ -360,9 +538,15 @@ if __name__ == "__main__":
     parser.add_argument("--cold_start", action="store_true", help="Evaluate cold-start performance")
     parser.add_argument("--performance_over_time", action="store_true", help="Evaluate performance over time")
     
+    # Reward strategy
+    parser.add_argument("--reward_strategy", type=str, choices=["cosine", "llm", "hybrid"], default="hybrid",
+                       help="Reward strategy to use for evaluation")
+    
     # Evaluation parameters
     parser.add_argument("--num_episodes", type=int, default=EVAL_CONFIG["num_eval_episodes"], 
                         help="Number of evaluation episodes")
+    parser.add_argument("--num_applicants", type=int, default=TRAINING_CONFIG["num_candidates"],
+                       help="Number of applicants to use for evaluation")
     parser.add_argument("--cold_start_episodes", type=int, default=10, 
                         help="Number of episodes for cold-start evaluation")
     parser.add_argument("--cold_start_steps", type=int, default=10, 
@@ -373,8 +557,8 @@ if __name__ == "__main__":
                         help="Use LLM simulator for evaluation")
     
     # Other parameters
-    parser.add_argument("--seed", type=int, default=100, help="Random seed")
-    parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu", 
+    parser.add_argument("--seed", type=int, default=ENV_CONFIG["random_seed"], help="Random seed")
+    parser.add_argument("--device", type=str, default=TRAINING_CONFIG["device"], 
                         help="Device to run evaluation on")
     
     args = parser.parse_args()

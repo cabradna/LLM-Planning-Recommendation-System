@@ -993,7 +993,7 @@ results_path_src_dl = current_project_root_dl / "src" / "results"
 results_path_root_dl = current_project_root_dl / "results"
 
 # List of directories to process
-dirs_to_download_dl = [
+dirs_to_process_dl = [
     {"name": "project_root_results", "path": results_path_root_dl, "description": "Project Root Results (results/)"},
     {"name": "src_results", "path": results_path_src_dl, "description": "Source Results (src/results/)"}
 ]
@@ -1002,50 +1002,50 @@ dirs_to_download_dl = [
 IN_COLAB_DL = 'google.colab' in sys.modules
 
 if IN_COLAB_DL:
-    from google.colab import files
-    print("Running in Google Colab. Will attempt to zip and download results.")
+    from google.colab import drive
+    print("Running in Google Colab. Attempting to mount Google Drive and copy results.")
+    try:
+        drive.mount('/content/drive')
+        gdrive_base_path = Path('/content/drive/MyDrive/ColabNotebookResults_NeuralDynaQ') # Define a base path in GDrive
+        gdrive_base_path.mkdir(parents=True, exist_ok=True) # Create the base GDrive folder if it doesn't exist
+        print(f"Google Drive mounted. Results will be copied to: {gdrive_base_path}")
+    except Exception as e:
+        print(f"Error mounting Google Drive: {e}")
+        print("Results will not be uploaded to Google Drive.")
+        IN_COLAB_DL = False # Proceed as if not in Colab for file handling
 else:
     print("Not running in Google Colab. Paths to results will be printed for manual access.")
 
-for dir_info in dirs_to_download_dl:
-    dir_path = dir_info["path"]
-    dir_zip_name = dir_info["name"] # Name for the zip file stem
+for dir_info in dirs_to_process_dl:
+    source_dir_path = dir_info["path"]
+    target_gdrive_folder_name = dir_info["name"] # Used for creating a subfolder in GDrive
     dir_desc = dir_info["description"]
     
-    print(f"\nProcessing directory: {dir_desc} at {dir_path}")
+    print(f"\nProcessing directory: {dir_desc} at {source_dir_path}")
 
-    if dir_path.exists() and dir_path.is_dir():
-        if IN_COLAB_DL:
-            # Define the full path for the zip file stem (e.g. /content/project_root_results)
-            # .zip will be added by make_archive
-            zip_file_stem_path = current_project_root_dl / dir_zip_name
-            zip_final_path = current_project_root_dl / (dir_zip_name + ".zip")
+    if source_dir_path.exists() and source_dir_path.is_dir():
+        if IN_COLAB_DL and 'gdrive_base_path' in locals(): # Check if GDrive mount was successful
+            # Define the target path in Google Drive for this specific results directory
+            target_gdrive_path = gdrive_base_path / target_gdrive_folder_name
             
-            print(f"Zipping contents of {dir_path} to {zip_final_path}...")
+            print(f"Copying contents of {source_dir_path} to Google Drive at {target_gdrive_path}...")
             try:
-                shutil.make_archive(str(zip_file_stem_path), 'zip', root_dir=str(dir_path))
-                print(f"Successfully created zip file: {zip_final_path}")
+                # If target GDrive folder exists, remove it first to ensure a clean copy
+                if target_gdrive_path.exists():
+                    shutil.rmtree(target_gdrive_path)
+                    print(f"Removed existing directory in Google Drive: {target_gdrive_path}")
                 
-                print(f"Starting download of {zip_final_path}...")
-                files.download(str(zip_final_path))
-                print(f"Download initiated for {zip_final_path}.")
-                
-                # Clean up the temporary zip file
-                os.remove(zip_final_path)
-                print(f"Removed temporary zip file: {zip_final_path}")
-
+                shutil.copytree(str(source_dir_path), str(target_gdrive_path))
+                print(f"Successfully copied contents of {source_dir_path} to {target_gdrive_path} in Google Drive.")
             except Exception as e:
-                print(f"Error during zipping, downloading, or cleanup for {dir_path}: {e}")
-                # If zip was created but download/removal failed, it might still be there.
-                if zip_final_path.exists():
-                    print(f"Temporary zip file {zip_final_path} might still exist. You may want to remove it manually.")
-        else: # Not in Colab
-            print(f"Results directory found at: {dir_path.resolve()}")
+                print(f"Error copying {source_dir_path} to Google Drive: {e}")
+        else: # Not in Colab or GDrive mount failed
+            print(f"Results directory found at: {source_dir_path.resolve()}")
             print(f"Please navigate to this directory ({dir_desc}) to access the files manually.")
     else:
-        print(f"Directory {dir_path} ({dir_desc}) does not exist or is not a directory. Skipping.")
+        print(f"Directory {source_dir_path} ({dir_desc}) does not exist or is not a directory. Skipping.")
 
-print("\nFinished processing all specified results directories for download.")
+print("\nFinished processing all specified results directories.")
 # %%
 # Clean up resources
 db_connector.close()

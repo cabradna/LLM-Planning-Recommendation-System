@@ -11,13 +11,15 @@ import sys
 import argparse
 import logging
 from typing import List, Dict, Any, Optional
-from huggingface_hub import login
+import torch
+import numpy as np
+import random
 
 # Add the project root directory to the path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # Import configuration
-from config.config import HF_CONFIG
+from config.config import HF_CONFIG, MODEL_CONFIG, TRAINING_CONFIG, PATH_CONFIG, STRATEGY_CONFIG, ENV_CONFIG
 
 # Configure logging
 logging.basicConfig(
@@ -30,6 +32,22 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+def set_seed(seed: int) -> None:
+    """
+    Set random seed for reproducibility.
+    
+    Args:
+        seed: Random seed.
+    """
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    np.random.seed(seed)
+    random.seed(seed)
+    
+    # Set deterministic backend for CuDNN
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
 # Login to Hugging Face
 try:
     token_path = HF_CONFIG["token_path"]
@@ -40,11 +58,13 @@ try:
     
     with open(token_path, "r") as f:
         token = f.read().strip()
+    
+    from huggingface_hub import login
     login(token=token)
     logger.info("Successfully logged in to Hugging Face")
 except Exception as e:
     logger.error(f"Failed to login to Hugging Face: {e}")
-    sys.exit(1)
+    logger.warning("Hugging Face login failed - LLM functionality may be limited")
 
 def show_info() -> None:
     """
@@ -83,9 +103,9 @@ def run_pretraining(args: List[str]) -> None:
     parser = argparse.ArgumentParser(description="Pretrain Dyna-Q job recommender models")
     
     # Data options
-    parser.add_argument("--method", type=str, choices=["cosine", "llm", "hybrid"], default="cosine",
+    parser.add_argument("--strategy", type=str, choices=["cosine", "llm", "hybrid"], default="cosine",
                       help="Method for pretraining: cosine (baseline), llm, or hybrid")
-    parser.add_argument("--cosine_weight", type=float, default=0.3,
+    parser.add_argument("--cosine_weight", type=float, default=STRATEGY_CONFIG["hybrid"]["initial_cosine_weight"],
                       help="Weight for cosine similarity in hybrid method (0-1)")
     parser.add_argument("--dataset_limit", type=int, default=None,
                       help="Maximum number of examples to load from database")
@@ -97,11 +117,14 @@ def run_pretraining(args: List[str]) -> None:
     # Model parameters
     parser.add_argument("--learning_rate", type=float, default=None, help="Learning rate for pretraining")
     parser.add_argument("--batch_size", type=int, default=None, help="Batch size for pretraining")
-    parser.add_argument("--epochs", type=int, default=None, help="Number of epochs for pretraining")
+    parser.add_argument("--num_epochs", type=int, default=None, help="Number of epochs for pretraining")
     
     # Other parameters
-    parser.add_argument("--seed", type=int, default=42, help="Random seed")
+    parser.add_argument("--seed", type=int, default=ENV_CONFIG["random_seed"], help="Random seed")
+    parser.add_argument("--device", type=str, default=TRAINING_CONFIG["device"], help="Device to use for training")
     parser.add_argument("--save_path", type=str, default=None, help="Path to save pretrained models")
+    parser.add_argument("--num_applicants", type=int, default=TRAINING_CONFIG["num_candidates"],
+                      help="Number of applicants to use for pretraining")
     
     # Parse arguments
     pretraining_args = parser.parse_args(args)
@@ -114,7 +137,7 @@ def run_pretraining(args: List[str]) -> None:
     # Run pretraining with parsed arguments
     main(pretraining_args)
     
-    logger.info(f"Pretraining complete with method: {pretraining_args.method}")
+    logger.info(f"Pretraining complete with strategy: {pretraining_args.strategy}")
 
 def run_training(args: List[str]) -> None:
     """
@@ -133,31 +156,49 @@ def run_training(args: List[str]) -> None:
     parser.add_argument("--train_baseline", action="store_true", help="Train baseline agent")
     parser.add_argument("--train_pretrained", action="store_true", help="Train pretrained agent")
     parser.add_argument("--pretrained_model_path", type=str, help="Path to pretrained model directory")
+    parser.add_argument("--applicant_id", type=str, help="Target applicant ID to train for")
     
     # Training strategy
-    parser.add_argument("--strategy", type=str, choices=["cosine", "llm", "hybrid"], default="cosine",
+    parser.add_argument("--strategy", type=str, choices=["cosine", "llm", "hybrid"], default="hybrid",
                       help="Training strategy: cosine (baseline), llm (LLM feedback), or hybrid (combined)")
-    parser.add_argument("--cosine_weight", type=float, default=1.0,
+    parser.add_argument("--cosine_weight", type=float, default=STRATEGY_CONFIG["hybrid"]["initial_cosine_weight"],
                       help="Initial weight for cosine similarity in hybrid method (0-1)")
-    parser.add_argument("--switch_episode", type=int, default=None,
-                      help="Episode to switch from cosine to LLM feedback in hybrid strategy")
-    parser.add_argument("--cosine_annealing", action="store_true",
-                      help="Whether to gradually anneal cosine weight in hybrid strategy")
+    parser.add_argument("--final_cosine_weight", type=float, default=STRATEGY_CONFIG["hybrid"]["final_cosine_weight"],
+                      help="Final weight for cosine similarity in hybrid method (0-1)")
+    parser.add_argument("--annealing_episodes", type=int, default=STRATEGY_CONFIG["hybrid"]["annealing_episodes"],
+                      help="Number of episodes to anneal cosine weight in hybrid strategy")
     
     # Training parameters
-    parser.add_argument("--num_episodes", type=int, default=None, help="Number of training episodes")
-    parser.add_argument("--planning_steps", type=int, default=None, help="Number of planning steps per real step")
+    parser.add_argument("--num_episodes", type=int, default=TRAINING_CONFIG["num_episodes"], 
+                      help="Number of training episodes")
+    parser.add_argument("--max_steps_per_episode", type=int, default=TRAINING_CONFIG["max_steps_per_episode"],
+                      help="Maximum steps per episode")
+    parser.add_argument("--planning_steps", type=int, default=TRAINING_CONFIG["planning_steps"], 
+                      help="Number of planning steps per real step")
+    parser.add_argument("--batch_size", type=int, default=TRAINING_CONFIG["batch_size"],
+                      help="Batch size for training")
+    parser.add_argument("--learning_rate", type=float, default=TRAINING_CONFIG["lr"],
+                      help="Learning rate for training")
+    parser.add_argument("--gamma", type=float, default=TRAINING_CONFIG["gamma"],
+                      help="Discount factor for RL")
     
     # Evaluation options
-    parser.add_argument("--compare", action="store_true", help="Compare baseline and pretrained agents")
+    parser.add_argument("--eval_frequency", type=int, default=TRAINING_CONFIG["eval_frequency"],
+                      help="Frequency of evaluation during training")
+    parser.add_argument("--num_eval_episodes", type=int, default=TRAINING_CONFIG["num_eval_episodes"],
+                      help="Number of episodes for evaluation during training")
     
     # Environment options
     parser.add_argument("--use_llm_simulator", action="store_true", help="Use LLM simulator for training")
-    parser.add_argument("--llm_model_name", type=str, default=None, help="Name of LLM model to use for simulation")
+    parser.add_argument("--llm_model_name", type=str, default=STRATEGY_CONFIG["llm"]["model_id"], 
+                      help="Name of LLM model to use for simulation")
     
     # Other parameters
-    parser.add_argument("--seed", type=int, default=42, help="Random seed")
+    parser.add_argument("--seed", type=int, default=ENV_CONFIG["random_seed"], help="Random seed")
+    parser.add_argument("--device", type=str, default=TRAINING_CONFIG["device"], help="Device to use for training")
     parser.add_argument("--save_path", type=str, default=None, help="Path to save trained models")
+    parser.add_argument("--num_applicants", type=int, default=TRAINING_CONFIG["num_candidates"],
+                      help="Number of applicants to use for training")
     
     # Parse arguments
     training_args = parser.parse_args(args)
@@ -198,15 +239,28 @@ def run_evaluation(args: List[str]) -> None:
     parser.add_argument("--cold_start", action="store_true", help="Evaluate cold-start performance")
     parser.add_argument("--performance_over_time", action="store_true", help="Evaluate performance over time")
     
+    # Reward strategy
+    parser.add_argument("--reward_strategy", type=str, choices=["cosine", "llm", "hybrid"], default="hybrid",
+                       help="Reward strategy to use for evaluation")
+    
     # Evaluation parameters
-    parser.add_argument("--num_episodes", type=int, default=None, help="Number of evaluation episodes")
-    parser.add_argument("--cold_start_episodes", type=int, default=10, help="Number of episodes for cold-start evaluation")
-    parser.add_argument("--cold_start_steps", type=int, default=10, help="Number of steps per episode for cold-start evaluation")
-    parser.add_argument("--eval_interval", type=int, default=100, help="Interval for performance over time evaluation")
-    parser.add_argument("--use_llm_simulator", action="store_true", help="Use LLM simulator for evaluation")
+    parser.add_argument("--num_episodes", type=int, default=TRAINING_CONFIG["num_eval_episodes"], 
+                        help="Number of evaluation episodes")
+    parser.add_argument("--num_applicants", type=int, default=TRAINING_CONFIG["num_candidates"],
+                       help="Number of applicants to use for evaluation")
+    parser.add_argument("--cold_start_episodes", type=int, default=10, 
+                        help="Number of episodes for cold-start evaluation")
+    parser.add_argument("--cold_start_steps", type=int, default=10, 
+                        help="Number of steps per episode for cold-start evaluation")
+    parser.add_argument("--eval_interval", type=int, default=100, 
+                        help="Interval for performance over time evaluation")
+    parser.add_argument("--use_llm_simulator", action="store_true", 
+                        help="Use LLM simulator for evaluation")
     
     # Other parameters
-    parser.add_argument("--seed", type=int, default=42, help="Random seed")
+    parser.add_argument("--seed", type=int, default=ENV_CONFIG["random_seed"], help="Random seed")
+    parser.add_argument("--device", type=str, default=TRAINING_CONFIG["device"], 
+                        help="Device to run evaluation on")
     
     # Parse arguments
     evaluation_args = parser.parse_args(args)
@@ -242,124 +296,257 @@ def run_simulation(args: List[str]) -> None:
     
     # Simulation parameters
     parser.add_argument("--num_episodes", type=int, default=10, help="Number of simulation episodes")
-    parser.add_argument("--candidate_id", type=str, default=None, help="Specific candidate ID to simulate")
+    parser.add_argument("--applicant_id", type=str, default=None, help="Specific applicant ID to simulate")
+    parser.add_argument("--num_recommendations", type=int, default=5, help="Number of recommendations to generate")
     parser.add_argument("--interactive", action="store_true", help="Run in interactive mode")
     
+    # Strategy
+    parser.add_argument("--strategy", type=str, choices=["cosine", "llm", "hybrid"], default="hybrid",
+                       help="Reward strategy to use for simulation")
+    
     # Other parameters
-    parser.add_argument("--seed", type=int, default=42, help="Random seed")
+    parser.add_argument("--seed", type=int, default=ENV_CONFIG["random_seed"], help="Random seed")
+    parser.add_argument("--device", type=str, default=TRAINING_CONFIG["device"], help="Device to use for simulation")
     
     # Parse arguments
     simulation_args = parser.parse_args(args)
     
-    # Import necessary modules (delayed import to avoid circular dependencies)
-    import torch
-    import random
-    import numpy as np
-    from data.database import DatabaseConnector
-    from environments.job_env import JobRecommendationEnv, LLMSimulatorEnv
-    from training.agent import DynaQAgent
-    
     # Set random seed
-    torch.manual_seed(simulation_args.seed)
-    torch.cuda.manual_seed_all(simulation_args.seed)
-    np.random.seed(simulation_args.seed)
-    random.seed(simulation_args.seed)
+    set_seed(simulation_args.seed)
+    
+    # Import necessary modules
+    import torch
+    from data.database import DatabaseConnector
+    from data.tensor_cache import TensorCache
+    from environments.job_env import JobRecommendationEnv, LLMSimulatorEnv, HybridEnv
+    from training.agent import DynaQAgent
+    from utils.visualizer import Visualizer
     
     # Initialize database connector
     db_connector = DatabaseConnector()
     
-    # Create environment
-    env = JobRecommendationEnv(db_connector=db_connector, random_seed=simulation_args.seed)
+    # Initialize TensorCache
+    tensor_cache = TensorCache(device=simulation_args.device)
+    logger.info(f"Initializing TensorCache on {simulation_args.device}")
     
-    # Load agent
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    agent = DynaQAgent.load_models(
-        model_dir=simulation_args.model_path,
-        episode=simulation_args.episode,
-        device=device
-    )
-    
-    logger.info(f"Running simulation with model from {simulation_args.model_path}")
-    
-    # Get candidate IDs
-    if simulation_args.candidate_id:
-        # Use the specified candidate ID
-        candidate_ids = [simulation_args.candidate_id]
+    # Get applicant IDs
+    if simulation_args.applicant_id:
+        # Use the specified applicant ID
+        applicant_ids = [simulation_args.applicant_id]
+        logger.info(f"Using specified applicant ID: {simulation_args.applicant_id}")
     else:
-        # Fetch a sample of candidate IDs from the database
-        candidates_collection = db_connector.db[db_connector.collections["candidates_embeddings"]]
-        candidates = list(candidates_collection.find().limit(simulation_args.num_episodes))
-        candidate_ids = [candidate.get("original_candidate_id") for candidate in candidates if candidate.get("original_candidate_id")]
-        
-        if not candidate_ids:
-            logger.error("No candidate IDs found in the database")
+        # Fetch applicant IDs from the database
+        try:
+            collection = db_connector.db[db_connector.collections["candidates_text"]]
+            applicant_ids = [doc["_id"] for doc in collection.find({}, {"_id": 1}).limit(10)]
+            if not applicant_ids:
+                raise ValueError("No applicant IDs found in the database")
+            logger.info(f"Selected applicant IDs from database: {applicant_ids[0]} (plus {len(applicant_ids)-1} more)")
+        except Exception as e:
+            logger.error(f"Error selecting applicants: {e}")
             return
     
-    # Run simulation for each candidate
-    total_reward = 0
-    episode_rewards = []
+    # Copy data from database to TensorCache
+    tensor_cache.copy_from_database(
+        db_connector=db_connector,
+        applicant_ids=applicant_ids
+    )
+    stats = tensor_cache.cache_stats()
+    logger.info(f"Cache initialized with {stats['job_count']} jobs and {stats['applicant_state_count']} applicant states")
     
-    for episode, candidate_id in enumerate(candidate_ids[:simulation_args.num_episodes]):
-        logger.info(f"Episode {episode+1}/{len(candidate_ids[:simulation_args.num_episodes])}: Candidate {candidate_id}")
+    # Create simulation environment based on reward strategy
+    if simulation_args.strategy == "cosine":
+        env = JobRecommendationEnv(
+            tensor_cache=tensor_cache,
+            reward_scheme=STRATEGY_CONFIG["llm"]["response_mapping"],
+            reward_strategy="cosine",
+            random_seed=simulation_args.seed
+        )
+        logger.info("Created JobRecommendationEnv with cosine reward strategy")
+    elif simulation_args.strategy == "llm":
+        env = LLMSimulatorEnv(
+            tensor_cache=tensor_cache,
+            reward_scheme=STRATEGY_CONFIG["llm"]["response_mapping"],
+            random_seed=simulation_args.seed
+        )
         
+        # Setup LLM
         try:
-            # Get candidate state
-            state = db_connector.get_applicant_state(candidate_id)
+            from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
             
-            # Sample candidate jobs
-            candidate_jobs = db_connector.sample_candidate_jobs(n=20)
-            job_ids = [job.get("original_job_id") for job in candidate_jobs if job.get("original_job_id")]
+            # Load model and tokenizer
+            model_id = STRATEGY_CONFIG["llm"]["model_id"]
+            bnb_config = BitsAndBytesConfig(
+                load_in_4bit=STRATEGY_CONFIG["llm"]["quantization"]["load_in_4bit"],
+                bnb_4bit_quant_type=STRATEGY_CONFIG["llm"]["quantization"]["quant_type"],
+                bnb_4bit_use_nested_quant=STRATEGY_CONFIG["llm"]["quantization"]["use_nested_quant"],
+                bnb_4bit_compute_dtype=torch.bfloat16
+            )
             
-            if not job_ids:
-                logger.warning(f"No job IDs found for candidate {candidate_id}, skipping")
-                continue
+            logger.info(f"Loading LLM model {model_id}")
+            tokenizer = AutoTokenizer.from_pretrained(model_id)
+            llm_model = AutoModelForCausalLM.from_pretrained(
+                model_id,
+                quantization_config=bnb_config,
+                device_map="auto"
+            )
             
-            # Get job vectors
-            job_vectors = db_connector.get_job_vectors(job_ids)
+            # Setup LLM in environment
+            env = env.setup_llm(llm_model, tokenizer, device="auto")
+            logger.info(f"LLM model set up in environment")
+        except Exception as e:
+            logger.error(f"Failed to set up LLM: {e}")
+            return
+        
+        logger.info("Created LLMSimulatorEnv with LLM reward strategy")
+    elif simulation_args.strategy == "hybrid":
+        env = HybridEnv(
+            tensor_cache=tensor_cache,
+            reward_scheme=STRATEGY_CONFIG["llm"]["response_mapping"],
+            cosine_weight=STRATEGY_CONFIG["hybrid"]["initial_cosine_weight"],
+            random_seed=simulation_args.seed
+        )
+        
+        # Setup LLM
+        try:
+            from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
             
-            if not job_vectors:
-                logger.warning(f"No job vectors found for candidate {candidate_id}, skipping")
-                continue
+            # Load model and tokenizer
+            model_id = STRATEGY_CONFIG["llm"]["model_id"]
+            bnb_config = BitsAndBytesConfig(
+                load_in_4bit=STRATEGY_CONFIG["llm"]["quantization"]["load_in_4bit"],
+                bnb_4bit_quant_type=STRATEGY_CONFIG["llm"]["quantization"]["quant_type"],
+                bnb_4bit_use_nested_quant=STRATEGY_CONFIG["llm"]["quantization"]["use_nested_quant"],
+                bnb_4bit_compute_dtype=torch.bfloat16
+            )
             
-            # Initialize environment for this candidate
-            env.reset(candidate_id=candidate_id, available_jobs=job_ids)
+            logger.info(f"Loading LLM model {model_id}")
+            tokenizer = AutoTokenizer.from_pretrained(model_id)
+            llm_model = AutoModelForCausalLM.from_pretrained(
+                model_id,
+                quantization_config=bnb_config,
+                device_map="auto"
+            )
             
-            # Interactive mode
-            if simulation_args.interactive:
-                print(f"\nCandidate ID: {candidate_id}")
-                print("-" * 50)
+            # Setup LLM in environment
+            env = env.setup_llm(llm_model, tokenizer, device="auto")
+            logger.info(f"LLM model set up in environment")
+        except Exception as e:
+            logger.error(f"Failed to set up LLM: {e}")
+            return
+        
+        logger.info("Created HybridEnv with hybrid reward strategy")
+    else:
+        logger.error(f"Invalid reward strategy: {simulation_args.strategy}")
+        return
+    
+    # Load agent
+    device = torch.device(simulation_args.device)
+    try:
+        agent = DynaQAgent.load_models(
+            model_dir=simulation_args.model_path,
+            episode=simulation_args.episode,
+            device=device
+        )
+        # Set tensor_cache for agent
+        agent.tensor_cache = tensor_cache
+        logger.info(f"Loaded agent from {simulation_args.model_path}")
+    except Exception as e:
+        logger.error(f"Failed to load agent: {e}")
+        return
+    
+    # Initialize visualizer
+    visualizer = Visualizer()
+    
+    # Target applicant for recommendations
+    target_applicant_id = applicant_ids[0]
+    
+    # Interactive mode
+    if simulation_args.interactive:
+        print(f"\nInteractive Simulation Mode for Applicant ID: {target_applicant_id}")
+        print("=" * 80)
+        
+        # Get applicant details
+        try:
+            candidate_text = db_connector.get_applicant_details(target_applicant_id)
+            if candidate_text:
+                print(f"Applicant Bio: {candidate_text.get('bio', 'N/A')}")
+                print(f"Applicant Skills: {', '.join(candidate_text.get('skills', []))}")
+                print("=" * 80)
+        except Exception as e:
+            print(f"Error retrieving applicant details: {e}")
+        
+        # Reset environment for target applicant
+        state = env.reset(applicant_id=target_applicant_id)
+        
+        # Generate and display recommendations
+        recommendations = []
+        
+        for i in range(simulation_args.num_recommendations):
+            valid_job_indices = env.get_valid_actions()
+            
+            if not valid_job_indices:
+                print("No more valid job recommendations available.")
+                break
+            
+            # Get job tensors
+            action_tensors = [tensor_cache.get_job_vector_by_index(idx) for idx in valid_job_indices]
+            
+            # Select action
+            action_idx, _ = agent.select_action(state, action_tensors, eval_mode=True)
+            job_idx = valid_job_indices[action_idx]
+            
+            # Get job details
+            try:
+                job_id = tensor_cache.get_job_id(job_idx)
+                job_details = tensor_cache.get_job_metadata(job_id)
                 
-                # Get candidate details
-                candidates_text_collection = db_connector.db["candidates_text"]
-                candidate_text = candidates_text_collection.find_one({"original_candidate_id": candidate_id})
+                # Get Q-value
+                with torch.no_grad():
+                    state_tensor = state.unsqueeze(0) if state.dim() == 1 else state
+                    job_tensor = tensor_cache.get_job_vector_by_index(job_idx).unsqueeze(0)
+                    q_value = agent.q_network(state_tensor, job_tensor).item()
                 
-                if candidate_text:
-                    print(f"Candidate Bio: {candidate_text.get('bio', 'N/A')}")
-                    print(f"Candidate Skills: {', '.join(candidate_text.get('skills', []))}")
-                    print("-" * 50)
+                recommendations.append({
+                    "rank": i + 1,
+                    "job_id": job_id,
+                    "job_title": job_details.get("job_title", "N/A"),
+                    "q_value": q_value,
+                    "job_details": job_details
+                })
                 
-                step = 0
-                episode_reward = 0
-                done = False
+                # Display recommendation
+                print(f"\nRecommendation #{i+1}: [Q-Value: {q_value:.4f}]")
+                print(f"Job Title: {job_details.get('job_title', 'N/A')}")
+                description = job_details.get('description', 'N/A')
+                print(f"Description: {description[:200]}..." if len(description) > 200 else f"Description: {description}")
+                if 'technical_skills' in job_details:
+                    skills = job_details['technical_skills']
+                    if isinstance(skills, list):
+                        print(f"Technical Skills: {', '.join(map(str, skills))}")
+                    else:
+                        print(f"Technical Skills: {skills}")
+                print("-" * 80)
                 
-                while not done and step < 10:  # Limit to 10 steps for interactive mode
-                    # Agent selects action
-                    job_idx = agent.select_action(state, job_vectors)
-                    job_id = job_ids[job_idx]
+                # Get user feedback
+                if not simulation_args.interactive:
+                    # Take environment step
+                    next_state, reward, done, _ = env.step(job_idx)
+                    state = next_state
                     
-                    # Get job details
-                    job_details = db_connector.get_job_details(job_id)
+                    print(f"Automatic feedback - Reward: {reward:.2f}")
                     
-                    if job_details:
-                        print(f"\nStep {step+1}: Recommended Job")
-                        print(f"Job Title: {job_details.get('job_title', 'N/A')}")
-                        print(f"Description: {job_details.get('description', 'N/A')[:200]}...")
-                        print("-" * 50)
-                    
-                    # Get user feedback
+                    if done:
+                        print("Episode complete!")
+                        break
+                else:
                     valid_feedback = False
                     while not valid_feedback:
-                        feedback = input("Your feedback (APPLY: 1.0, SAVE: 0.5, CLICK: 0.0, IGNORE: -0.1): ").strip().upper()
+                        feedback = input("Your feedback (APPLY: 1.0, SAVE: 0.5, CLICK: 0.0, IGNORE: -0.1, NEXT: skip): ").strip().upper()
+                        
+                        if feedback == "NEXT":
+                            print("Skipping to next recommendation...")
+                            break
                         
                         feedback_map = {
                             "APPLY": 1.0,
@@ -373,72 +560,110 @@ def run_simulation(args: List[str]) -> None:
                         }
                         
                         if feedback in feedback_map:
-                            reward = feedback_map[feedback]
+                            reward_value = feedback_map[feedback]
+                            # Take environment step (this affects future recommendations)
+                            next_state, reward, done, _ = env.step(job_idx)
+                            
+                            # Optionally update the agent (if learning during simulation)
+                            # agent.update(state, tensor_cache.get_job_vector_by_index(job_idx), reward, next_state)
+                            
+                            state = next_state
+                            print(f"Feedback recorded: {feedback} (Reward: {reward_value})")
+                            
                             valid_feedback = True
                         else:
                             print("Invalid feedback. Please use APPLY, SAVE, CLICK, IGNORE or the corresponding values.")
                     
-                    # Take action
-                    next_state, reward, done, _ = env.step(job_idx)
-                    
-                    # Update agent
-                    agent.update(state, job_vectors[job_idx], reward, next_state)
-                    
-                    # Update state
-                    state = next_state
-                    episode_reward += reward
-                    step += 1
-                    
-                    print(f"Reward: {reward}, Cumulative Reward: {episode_reward}")
-                    print("-" * 50)
-                    
-                    if done:
+                    if valid_feedback and done:
                         print("Episode complete!")
                         break
-                
-                # Continue to next candidate?
-                if episode < len(candidate_ids) - 1:
-                    continue_sim = input("\nContinue to next candidate? (y/n): ").strip().lower()
-                    if continue_sim != 'y':
-                        break
-            
-            # Automated mode
-            else:
-                # Run episode
-                state = env.reset(candidate_id=candidate_id, available_jobs=job_ids)
-                episode_reward = 0
-                done = False
-                step = 0
-                
-                while not done and step < 20:  # Limit steps per episode
-                    # Select action
-                    job_idx = agent.select_action(state, job_vectors)
-                    
-                    # Take action
-                    next_state, reward, done, _ = env.step(job_idx)
-                    
-                    # Update agent
-                    agent.update(state, job_vectors[job_idx], reward, next_state)
-                    
-                    # Update state
-                    state = next_state
-                    episode_reward += reward
-                    step += 1
-                
-                logger.info(f"Episode {episode+1} complete: Reward = {episode_reward:.2f}")
-                episode_rewards.append(episode_reward)
-                total_reward += episode_reward
-        except Exception as e:
-            logger.error(f"Error in episode {episode+1} with candidate {candidate_id}: {e}")
-            continue
-    
-    # Report results
-    if not simulation_args.interactive and episode_rewards:
-        avg_reward = total_reward / len(episode_rewards)
-        logger.info(f"Simulation complete: Average reward = {avg_reward:.2f}")
+            except Exception as e:
+                print(f"Error processing recommendation: {e}")
+                continue
         
-    # Close database connection
+        print("\nSimulation complete!")
+    
+    # Non-interactive mode
+    else:
+        logger.info(f"Running non-interactive simulation for applicant: {target_applicant_id}")
+        
+        # Reset environment for target applicant
+        state = env.reset(applicant_id=target_applicant_id)
+        
+        # Generate recommendations
+        recommended_jobs = []
+        recommendation_scores = []
+        valid_job_indices = list(range(len(tensor_cache)))
+        
+        for _ in range(min(simulation_args.num_recommendations, len(valid_job_indices))):
+            action_tensors = [tensor_cache.get_job_vector_by_index(idx) for idx in valid_job_indices]
+            
+            if not action_tensors:
+                logger.warning("No more actions available to recommend.")
+                break
+                
+            if not isinstance(state, torch.Tensor):
+                state = torch.tensor(state, device=device, dtype=torch.float32)
+                
+            action_idx, _ = agent.select_action(state, action_tensors, eval_mode=True) 
+            
+            selected_cache_idx = valid_job_indices[action_idx]
+            job_id = tensor_cache.get_job_id(selected_cache_idx)
+            
+            with torch.no_grad():
+                state_tensor = state.unsqueeze(0) if state.dim() == 1 else state 
+                job_tensor = tensor_cache.get_job_vector_by_index(selected_cache_idx).unsqueeze(0)
+                q_value = agent.q_network(state_tensor, job_tensor).item()
+            
+            recommended_jobs.append(job_id)
+            recommendation_scores.append(q_value)
+            
+            # Take step in environment
+            next_state, reward, done, _ = env.step(selected_cache_idx)
+            state = next_state
+            
+            # Remove recommended job from valid jobs
+            valid_job_indices.pop(action_idx)
+            
+            if done:
+                logger.info("Episode complete during recommendation generation")
+                break
+        
+        # Log and display recommendations
+        logger.info(f"Generated {len(recommended_jobs)} recommendations for applicant {target_applicant_id}")
+        
+        print(f"\n=== Top Job Recommendations for Applicant: {target_applicant_id} ===\n")
+        for i, (job_id, score) in enumerate(zip(recommended_jobs, recommendation_scores)):
+            print(f"Recommendation #{i+1}: [Q-Value: {score:.4f}]")
+            print(f"Job ID: {job_id}")
+
+            try:
+                job_details = tensor_cache.get_job_metadata(job_id)
+                print(f"Title: {job_details.get('job_title', 'N/A')}")
+                description = job_details.get('description', 'N/A')
+                print(f"Description: {description[:100]}..." if len(description) > 100 else f"Description: {description}")
+                if 'technical_skills' in job_details:
+                    skills = job_details['technical_skills']
+                    if isinstance(skills, list):
+                        print(f"Technical Skills: {', '.join(map(str, skills))}")
+                    else:
+                        print(f"Technical Skills: {skills}")
+            except Exception as e:
+                logger.error(f"Error retrieving job details: {e}")
+                print(f"Error retrieving job details from cache: {e}")
+            print("-" * 50)
+    
+    # Clean up resources
     db_connector.close()
+    
+    if tensor_cache is not None and hasattr(tensor_cache, 'clear'):
+        tensor_cache.clear()
+        logger.info("Tensor cache cleared")
+        
+    # Free PyTorch memory
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        logger.info("CUDA cache emptied")
     
     logger.info("Simulation complete")
 
@@ -446,6 +671,9 @@ def main() -> None:
     """
     Main entry point for the Dyna-Q job recommender system.
     """
+    # Set random seed for reproducibility
+    set_seed(ENV_CONFIG["random_seed"])
+    
     # Create argument parser
     parser = argparse.ArgumentParser(description="Dyna-Q Job Recommender System", add_help=False)
     parser.add_argument("command", choices=["pretraining", "train", "evaluate", "simulate", "info"],

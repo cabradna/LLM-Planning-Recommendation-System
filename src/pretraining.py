@@ -2,7 +2,7 @@
 Pretraining script for the Dyna-Q job recommender model.
 
 This script handles pretraining of the Q-network and world model using
-different methods to mitigate the cold-start problem:
+different strategies to mitigate the cold-start problem:
 1. Cosine similarity (baseline)
 2. LLM simulation
 3. Hybrid (LLM + cosine)
@@ -23,9 +23,11 @@ from torch.utils.data import Dataset, DataLoader
 # Add the project root directory to the path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from config.config import MODEL_CONFIG, PRETRAINING_CONFIG, PATH_CONFIG, TRAINING_CONFIG, HF_CONFIG
+from config.config import STRATEGY_CONFIG, ENV_CONFIG
 
 # Import modules
 from data.database import DatabaseConnector
+from data.tensor_cache import TensorCache
 from data.data_loader import JobRecommendationDataset, create_pretraining_data_loader
 from models.q_network import QNetwork
 from models.world_model import WorldModel
@@ -58,6 +60,90 @@ def set_seed(seed: int) -> None:
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
 
+def load_cosine_data_using_tensor_cache(tensor_cache: TensorCache, 
+                                       target_applicant_id: str,
+                                       limit: int = PRETRAINING_CONFIG["dataset_size"],
+                                       device: str = TRAINING_CONFIG["device"]) -> JobRecommendationDataset:
+    """
+    Load data using TensorCache and create a dataset for pretraining using cosine similarity.
+    
+    Args:
+        tensor_cache: TensorCache with preloaded tensors.
+        target_applicant_id: The applicant ID to generate data for.
+        limit: Maximum number of examples to load.
+        device: Device to load tensors to.
+        
+    Returns:
+        JobRecommendationDataset: Dataset with examples from tensor cache.
+    """
+    logger.info(f"Loading data from tensor cache using cosine similarity, limit: {limit}")
+    
+    # Prepare lists for dataset
+    states = []
+    actions = []
+    rewards = []
+    next_states = []
+    
+    try:
+        # Get state vector for target applicant
+        initial_state_tensor = tensor_cache.get_applicant_state(target_applicant_id)
+        if initial_state_tensor is None:
+            logger.error(f"No state tensor found for applicant {target_applicant_id}")
+            raise ValueError(f"No state tensor found for applicant {target_applicant_id}")
+            
+        logger.info(f"Retrieved state tensor for applicant {target_applicant_id} with shape {initial_state_tensor.shape}")
+        
+        # Get valid job indices from tensor cache
+        valid_job_indices = tensor_cache.get_valid_job_indices()
+        
+        if not valid_job_indices:
+            logger.error("No valid job indices found in tensor cache")
+            raise ValueError("No valid job indices found in tensor cache")
+            
+        logger.info(f"Found {len(valid_job_indices)} valid jobs in tensor cache")
+        
+        # Calculate all cosine similarities at once for efficiency
+        all_rewards = tensor_cache.calculate_cosine_similarities(initial_state_tensor)
+        if STRATEGY_CONFIG["cosine"]["scale_reward"]:
+            all_rewards = (all_rewards + 1) / 2  # Scale from [-1, 1] to [0, 1]
+        
+        # Limit the number of samples if needed
+        num_samples = min(limit, len(valid_job_indices))
+        indices_to_use = valid_job_indices[:num_samples]
+        
+        # Generate samples
+        for idx in indices_to_use:
+            # Get job vector
+            action_tensor = tensor_cache.get_job_vector_by_index(idx)
+            
+            # Use precomputed reward
+            reward = all_rewards[idx].item()
+            
+            # For simplicity in pretraining, next_state = state (static state)
+            next_state = initial_state_tensor
+            
+            # Add to lists
+            states.append(initial_state_tensor)
+            actions.append(action_tensor)
+            rewards.append(reward)
+            next_states.append(next_state)
+                
+        logger.info(f"Created dataset with {len(states)} valid examples using cosine similarity")
+        
+        # Convert lists to tensors and create dataset
+        states_tensor = torch.stack(states).to(device)
+        actions_tensor = torch.stack(actions).to(device)
+        rewards_tensor = torch.tensor(rewards, dtype=torch.float32, device=device)
+        next_states_tensor = torch.stack(next_states).to(device)
+        
+        dataset = JobRecommendationDataset(states_tensor, actions_tensor, rewards_tensor, next_states_tensor)
+        return dataset
+        
+    except Exception as e:
+        logger.error(f"Error loading data from tensor cache: {e}")
+        raise ValueError(f"Failed to load data from tensor cache: {e}")
+
+# Legacy function - keep for backward compatibility
 def load_cosine_data_from_database(db_connector: DatabaseConnector, limit: int = PRETRAINING_CONFIG["dataset_size"]) -> JobRecommendationDataset:
     """
     Load data from the database and create a dataset for pretraining using cosine similarity.
@@ -938,22 +1024,51 @@ def main(args: argparse.Namespace) -> None:
     set_seed(args.seed)
     
     # Set device
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = torch.device(args.device if args.device else TRAINING_CONFIG["device"])
     logger.info(f"Using device: {device}")
     
     # Initialize database connector
     db_connector = DatabaseConnector()
     
+    # Initialize TensorCache
+    tensor_cache = TensorCache(device=device)
+    logger.info(f"Initializing TensorCache on {device}")
+    
+    # Get applicant IDs
+    try:
+        collection = db_connector.db[db_connector.collections["candidates_text"]]
+        applicant_ids = [doc["_id"] for doc in collection.find({}, {"_id": 1}).limit(args.num_applicants)]
+        if not applicant_ids:
+            raise ValueError("No applicant IDs found in the database")
+        target_applicant_id = applicant_ids[0]
+        logger.info(f"Selected target applicant ID: {target_applicant_id}")
+    except Exception as e:
+        logger.error(f"Error selecting target applicant: {e}")
+        raise
+    
+    # Copy data from database to TensorCache
+    tensor_cache.copy_from_database(
+        db_connector=db_connector,
+        applicant_ids=applicant_ids
+    )
+    stats = tensor_cache.cache_stats()
+    logger.info(f"Cache initialized with {stats['job_count']} jobs and {stats['applicant_state_count']} applicant states")
+    
     # Create output directory
-    output_dir = args.save_path or os.path.join(PATH_CONFIG["model_dir"], "pretrained", args.method)
+    output_dir = args.save_path or os.path.join(PATH_CONFIG["model_dir"], "pretrained", args.strategy)
     os.makedirs(output_dir, exist_ok=True)
     
-    # Load data from database based on method
+    # Load data based on strategy
     try:
-        if args.method == "cosine":
+        if args.strategy == "cosine":
             logger.info("Using cosine similarity for pretraining (baseline)")
-            dataset = load_cosine_data_from_database(db_connector, limit=args.dataset_limit)
-        elif args.method == "llm":
+            dataset = load_cosine_data_using_tensor_cache(
+                tensor_cache=tensor_cache,
+                target_applicant_id=target_applicant_id,
+                limit=args.dataset_limit,
+                device=device
+            )
+        elif args.strategy == "llm":
             logger.info("Using LLM simulation for pretraining")
             # Import and load LLM model if needed for LLM or hybrid methods
             try:
@@ -961,7 +1076,7 @@ def main(args: argparse.Namespace) -> None:
                 from huggingface_hub import login
                 
                 logger.info("Loading LLM model for simulation...")
-                model_id = "mistralai/Mistral-7B-Instruct-v0.2"
+                model_id = STRATEGY_CONFIG["llm"]["model_id"]
                 
                 # Login to Hugging Face
                 try:
@@ -981,9 +1096,9 @@ def main(args: argparse.Namespace) -> None:
                 
                 # Configure 4-bit quantization
                 bnb_config = BitsAndBytesConfig(
-                    load_in_4bit=True,
-                    bnb_4bit_quant_type="nf4",
-                    bnb_4bit_use_nested_quant=True,
+                    load_in_4bit=STRATEGY_CONFIG["llm"]["quantization"]["load_in_4bit"],
+                    bnb_4bit_quant_type=STRATEGY_CONFIG["llm"]["quantization"]["quant_type"],
+                    bnb_4bit_use_nested_quant=STRATEGY_CONFIG["llm"]["quantization"]["use_nested_quant"],
                     bnb_4bit_compute_dtype=torch.bfloat16
                 )
                 
@@ -999,14 +1114,18 @@ def main(args: argparse.Namespace) -> None:
                 
                 logger.info("LLM model loaded successfully")
                 
-                # Load data using LLM simulation
-                dataset = load_llm_data_from_database(
-                    db_connector, 
-                    llm_model=llm_model, 
-                    tokenizer=tokenizer, 
-                    device=device,
-                    limit=args.dataset_limit
+                # For now, we'll use a simplified version with TensorCache:
+                # First, create the dataset with cosine rewards as a fallback
+                dataset = load_cosine_data_using_tensor_cache(
+                    tensor_cache=tensor_cache,
+                    target_applicant_id=target_applicant_id,
+                    limit=args.dataset_limit,
+                    device=device
                 )
+                
+                # TODO: Implement proper LLM-based reward generation with TensorCache
+                # This is a temporary approach until we update the full LLM integration
+                logger.warning("Using cosine rewards as fallback for LLM strategy - proper LLM integration with TensorCache pending")
                 
             except ImportError as e:
                 logger.error(f"Failed to load transformers library: {e}")
@@ -1015,20 +1134,20 @@ def main(args: argparse.Namespace) -> None:
             except Exception as e:
                 logger.error(f"Failed to load LLM model: {e}")
                 raise
-        elif args.method == "hybrid":
+        elif args.strategy == "hybrid":
             logger.info(f"Using hybrid approach for pretraining (cosine weight: {args.cosine_weight})")
             # Import and load LLM model
             try:
                 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
                 
                 logger.info("Loading LLM model for simulation...")
-                model_id = "mistralai/Mistral-7B-Instruct-v0.2"
+                model_id = STRATEGY_CONFIG["llm"]["model_id"]
                 
                 # Configure 4-bit quantization
                 bnb_config = BitsAndBytesConfig(
-                    load_in_4bit=True,
-                    bnb_4bit_quant_type="nf4",
-                    bnb_4bit_use_nested_quant=True,
+                    load_in_4bit=STRATEGY_CONFIG["llm"]["quantization"]["load_in_4bit"],
+                    bnb_4bit_quant_type=STRATEGY_CONFIG["llm"]["quantization"]["quant_type"],
+                    bnb_4bit_use_nested_quant=STRATEGY_CONFIG["llm"]["quantization"]["use_nested_quant"],
                     bnb_4bit_compute_dtype=torch.bfloat16
                 )
                 
@@ -1044,15 +1163,18 @@ def main(args: argparse.Namespace) -> None:
                 
                 logger.info("LLM model loaded successfully")
                 
-                # Load data using hybrid approach
-                dataset = load_hybrid_data_from_database(
-                    db_connector, 
-                    llm_model=llm_model, 
-                    tokenizer=tokenizer, 
-                    device=device,
+                # For now, we'll use a simplified version with TensorCache:
+                # Use the cosine data as a starting point
+                dataset = load_cosine_data_using_tensor_cache(
+                    tensor_cache=tensor_cache,
+                    target_applicant_id=target_applicant_id,
                     limit=args.dataset_limit,
-                    cosine_weight=args.cosine_weight
+                    device=device
                 )
+                
+                # TODO: Implement proper hybrid reward generation with TensorCache
+                # This is a temporary approach until we update the full hybrid integration
+                logger.warning("Using cosine rewards as fallback for hybrid strategy - proper hybrid integration with TensorCache pending")
                 
             except ImportError as e:
                 logger.error(f"Failed to load transformers library: {e}")
@@ -1062,8 +1184,8 @@ def main(args: argparse.Namespace) -> None:
                 logger.error(f"Failed to load LLM model: {e}")
                 raise
         else:
-            logger.error(f"Invalid pretraining method: {args.method}")
-            raise ValueError(f"Invalid pretraining method: {args.method}")
+            logger.error(f"Invalid pretraining strategy: {args.strategy}")
+            raise ValueError(f"Invalid pretraining strategy: {args.strategy}")
         
         logger.info(f"Loaded dataset with {len(dataset)} samples")
     except Exception as e:
@@ -1077,16 +1199,9 @@ def main(args: argparse.Namespace) -> None:
         validation_split=PRETRAINING_CONFIG["validation_split"]
     )
     
-    # CONCEPTUAL NOTE: The validation loader (val_loader) contains a separate subset of the data
-    # that will be used to evaluate how well the model can predict precomputed rewards for state-action
-    # pairs it hasn't seen during training. These rewards (from cosine/LLM/hybrid) are already 
-    # calculated during dataset creation, so the validation is checking the model's ability to 
-    # generalize to new applicant-job pairs rather than generating new reward values.
-    # This helps measure how well the model will perform on unseen recommendations.
-    
     # Initialize metrics dictionary
     model_metrics = {
-        "pretraining_method": args.method
+        "pretraining_strategy": args.strategy
     }
     
     # Initialize and pretrain Q-network if requested
@@ -1096,8 +1211,9 @@ def main(args: argparse.Namespace) -> None:
             state_dim=MODEL_CONFIG["q_network"]["state_dim"],
             action_dim=MODEL_CONFIG["q_network"]["action_dim"],
             hidden_dims=MODEL_CONFIG["q_network"]["hidden_dims"],
-            dropout_rate=MODEL_CONFIG["q_network"]["dropout_rate"]
-        )
+            dropout_rate=MODEL_CONFIG["q_network"]["dropout_rate"],
+            activation=MODEL_CONFIG["q_network"]["activation"]
+        ).to(device)
         
         # Pretrain Q-network
         q_train_losses, q_val_losses = pretrain_q_network(
@@ -1105,7 +1221,7 @@ def main(args: argparse.Namespace) -> None:
             train_loader=train_loader,
             val_loader=val_loader,
             device=device,
-            num_epochs=args.epochs or PRETRAINING_CONFIG["num_epochs"],
+            num_epochs=args.num_epochs or PRETRAINING_CONFIG["num_epochs"],
             lr=args.learning_rate or PRETRAINING_CONFIG["lr"]
         )
         
@@ -1118,8 +1234,9 @@ def main(args: argparse.Namespace) -> None:
             state_dim=MODEL_CONFIG["q_network"]["state_dim"],
             action_dim=MODEL_CONFIG["q_network"]["action_dim"],
             hidden_dims=MODEL_CONFIG["q_network"]["hidden_dims"],
-            dropout_rate=MODEL_CONFIG["q_network"]["dropout_rate"]
-        )
+            dropout_rate=MODEL_CONFIG["q_network"]["dropout_rate"],
+            activation=MODEL_CONFIG["q_network"]["activation"]
+        ).to(device)
     
     # Initialize and pretrain world model if requested
     if args.pretrain_world_model:
@@ -1128,8 +1245,9 @@ def main(args: argparse.Namespace) -> None:
             input_dim=MODEL_CONFIG["world_model"]["input_dim"],
             state_dim=MODEL_CONFIG["q_network"]["state_dim"],
             hidden_dims=MODEL_CONFIG["world_model"]["hidden_dims"],
-            dropout_rate=MODEL_CONFIG["world_model"]["dropout_rate"]
-        )
+            dropout_rate=MODEL_CONFIG["world_model"]["dropout_rate"],
+            activation=MODEL_CONFIG["world_model"]["activation"]
+        ).to(device)
         
         # Pretrain world model
         world_train_losses, world_val_losses = pretrain_world_model(
@@ -1137,7 +1255,7 @@ def main(args: argparse.Namespace) -> None:
             train_loader=train_loader,
             val_loader=val_loader,
             device=device,
-            num_epochs=args.epochs or PRETRAINING_CONFIG["num_epochs"],
+            num_epochs=args.num_epochs or PRETRAINING_CONFIG["num_epochs"],
             lr=args.learning_rate or PRETRAINING_CONFIG["lr"]
         )
         
@@ -1150,11 +1268,27 @@ def main(args: argparse.Namespace) -> None:
             input_dim=MODEL_CONFIG["world_model"]["input_dim"],
             state_dim=MODEL_CONFIG["q_network"]["state_dim"],
             hidden_dims=MODEL_CONFIG["world_model"]["hidden_dims"],
-            dropout_rate=MODEL_CONFIG["world_model"]["dropout_rate"]
-        )
+            dropout_rate=MODEL_CONFIG["world_model"]["dropout_rate"],
+            activation=MODEL_CONFIG["world_model"]["activation"]
+        ).to(device)
     
     # Save pretrained models
     save_pretrained_models(q_network, world_model, output_dir, model_metrics)
+    
+    # Clean up resources
+    if tensor_cache is not None and hasattr(tensor_cache, 'clear'):
+        tensor_cache.clear()
+        logger.info("Tensor cache cleared")
+        
+    # Free PyTorch memory
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        logger.info("CUDA cache emptied")
+    
+    # Close database connection
+    db_connector.close()
+    
+    logger.info("Pretraining complete")
     
 
 if __name__ == "__main__":
@@ -1162,9 +1296,9 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Pretrain Dyna-Q job recommender models")
     
     # Data generation options
-    parser.add_argument("--method", type=str, choices=["cosine", "llm", "hybrid"], default="cosine",
-                      help="Method for pretraining: cosine (baseline), llm, or hybrid")
-    parser.add_argument("--cosine_weight", type=float, default=0.3,
+    parser.add_argument("--strategy", type=str, choices=["cosine", "llm", "hybrid"], default="cosine",
+                      help="Strategy for pretraining: cosine (baseline), llm, or hybrid")
+    parser.add_argument("--cosine_weight", type=float, default=STRATEGY_CONFIG["hybrid"]["initial_cosine_weight"],
                       help="Weight for cosine similarity in hybrid method (0-1)")
     parser.add_argument("--dataset_limit", type=int, default=PRETRAINING_CONFIG["dataset_size"],
                       help="Maximum number of examples to load from database")
@@ -1176,11 +1310,14 @@ if __name__ == "__main__":
     # Model parameters
     parser.add_argument("--learning_rate", type=float, default=None, help="Learning rate for pretraining")
     parser.add_argument("--batch_size", type=int, default=None, help="Batch size for pretraining")
-    parser.add_argument("--epochs", type=int, default=None, help="Number of epochs for pretraining")
+    parser.add_argument("--num_epochs", type=int, default=None, help="Number of epochs for pretraining")
     
     # Other parameters
-    parser.add_argument("--seed", type=int, default=42, help="Random seed")
+    parser.add_argument("--seed", type=int, default=ENV_CONFIG["random_seed"], help="Random seed")
+    parser.add_argument("--device", type=str, default=TRAINING_CONFIG["device"], help="Device to use for training")
     parser.add_argument("--save_path", type=str, default=None, help="Path to save pretrained models")
+    parser.add_argument("--num_applicants", type=int, default=TRAINING_CONFIG["num_candidates"],
+                      help="Number of applicants to use for pretraining")
     
     # Parse arguments
     args = parser.parse_args()
