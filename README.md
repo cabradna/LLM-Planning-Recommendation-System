@@ -12,10 +12,11 @@ This project implements an advanced job recommendation system utilizing the Dyna
 
 Our model demonstrates strong performance and training stability across multiple metrics:
 
-![Q-Network Loss Convergence](assets/images/q_network_loss.png)
+![multi_experiment_llm_q_network_loss](https://github.com/user-attachments/assets/327e5b8d-4938-4fb0-a755-04a735ad8b22)
+
 *Q-Network training loss shows a clear convergence trend, indicating the model is effectively learning job-applicant preferences even within limited training iterations.*
 
-![World Model Loss Convergence](assets/images/world_model_loss.png)
+![multi_experiment_llm_world_model_loss](https://github.com/user-attachments/assets/5cd1c9f3-a646-4c35-b603-2c36028b262f)
 *World Model loss demonstrates full convergence, validating the environment dynamics prediction capabilities critical for the planning phase of Dyna-Q.*
 
 These results confirm the viability of our approach for personalized job recommendations, with both Q-Network and World Model components showing expected learning behavior. The downward trend in Q-Network loss suggests additional training would yield further improvements, while the fully converged World Model ensures reliable planning capabilities.
