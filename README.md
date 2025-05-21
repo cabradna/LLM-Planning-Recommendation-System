@@ -92,7 +92,7 @@ Job recommendation is modeled as a Markov Decision Process (MDP):
 - **Transition**: $s_{t+1} = s_t$ (static applicant state)
 - **Objective**: Learn optimal Q-function $Q^*(s,a)$ where:
 
-$$Q^*(s,a) = \mathbb{E} \left[R_{t+1}+\gamma\max_{a'}Q^*(s_{t+1}, a')|s_t=s,a_t=a\right]$$
+`$$Q^*(s,a) = \mathbb{E} \left[R_{t+1}+\gamma\max_{a'}Q^*(s_{t+1}, a')|s_t=s,a_t=a\right]$$`
 
 For a more detailed formulation, see [RL Formulation Documentation](docs/rl_formulation.md).
 
