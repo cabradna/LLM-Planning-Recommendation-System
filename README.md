@@ -8,14 +8,26 @@ A reinforcement learning system for personalized job recommendations using the D
 
 This project implements an advanced job recommendation system utilizing the Dyna-Q reinforcement learning (RL) algorithm. The system is designed to provide highly personalized job recommendations by training specialized agents for individual applicants. A key innovation is the integration of Large Language Models (LLMs) to simulate user feedback, thereby enriching the training data and addressing the critical **cold-start problem** often encountered in recommender systems.
 
-### 1.1. Objectives
+### 1.1. Experimental Results
+
+Our model demonstrates strong performance and training stability across multiple metrics:
+
+![Q-Network Loss Convergence](assets/images/q_network_loss.png)
+*Q-Network training loss shows a clear convergence trend, indicating the model is effectively learning job-applicant preferences even within limited training iterations.*
+
+![World Model Loss Convergence](assets/images/world_model_loss.png)
+*World Model loss demonstrates full convergence, validating the environment dynamics prediction capabilities critical for the planning phase of Dyna-Q.*
+
+These results confirm the viability of our approach for personalized job recommendations, with both Q-Network and World Model components showing expected learning behavior. The downward trend in Q-Network loss suggests additional training would yield further improvements, while the fully converged World Model ensures reliable planning capabilities.
+
+### 1.2. Objectives
 
 - **Personalization**: Develop RL agents that learn the unique preferences of individual job applicants
 - **Cold-Start Mitigation**: Employ pre-training and LLM-simulated interactions for effective recommendations with limited user data
 - **Sample Efficiency**: Leverage the Dyna-Q architecture, combining model-free (direct RL) and model-based (planning) approaches
 - **Comparative Analysis**: Evaluate different reward generation strategies (cosine similarity, LLM-simulated feedback, hybrid)
 
-### 1.2. Key Innovations
+### 1.3. Key Innovations
 
 - **Single-Applicant Specialization**: Each RL agent is trained exclusively for one target applicant
 - **LLM-Powered Reward Simulation**: Uses LLMs to generate realistic feedback for richer training signals
